@@ -5,8 +5,8 @@ library('HDCD')
 # Simulation Sample
 set.seed(63130)
 N <- 10**6 # Population size
-mc <- 1000      # Number of MC iteration
-n <- 200       # Sample size
+mc <- 100      # Number of MC iteration
+ns <- c(200, 800, 1500)       # Sample size
 
 # Population {{{
 ## Truth
@@ -24,7 +24,7 @@ x <- runif(N, 0, 5) # try uniform distribution
 eps <- rnorm(N, 0, 1)
 
 ## y
-y <- gamma[1]*1 + gamma[2]*v + gamma[3]*x + eps
+y <- gamma[1] + gamma[2]*v + gamma[3]*x + eps
 
 ## pop
 pop <- data.frame(y, x, v0, v1)
@@ -32,54 +32,80 @@ pop <- data.frame(y, x, v0, v1)
 
 # Monte Carlo Simulation {{{
 mc_results <- data.frame()
-for (i in 1:mc) {
-  idx <- sample(N, n, replace=FALSE)
-  yn <- pop[idx, 'y']
-  xn <- pop[idx, 'x']
-  v0n <- pop[idx, 'v0']
-  v1n <- pop[idx, 'v1']
+for (n in ns) {
+  for (i in 1:mc) {
+    idx <- sample(N, n, replace=FALSE)
+    yn <- pop[idx, 'y']
+    xn <- pop[idx, 'x']
+    v0n <- pop[idx, 'v0']
+    v1n <- pop[idx, 'v1']
 
-  X.eval <- data.frame(v0n, v1n, xn)
+    X.eval <- data.frame(v0n, v1n, xn)
 
-  # Estimation
-  ## estimation of eta -- Nadaraya–Watson estimator
-  ### estimate the bandwidth first
-  bw <- np::npregbw(yn ~ v0n + v1n + xn, regtype='lc') 
+    # Estimation
+    ## estimation of eta -- Nadaraya–Watson estimator
+    ### estimate the bandwidth first
+    bw <- np::npregbw(yn ~ v0n + v1n + xn, regtype='lc') 
 
-  ### estimate eta Kernel regression
-  model <- npreg(bws = bw, gradients = TRUE)  
-  eta <- as.matrix(predict(model, newdata=X.eval))
+    ### estimate eta Kernel regression
+    model <- npreg(bws = bw, gradients = TRUE)  
+    eta <- as.matrix(predict(model, newdata=X.eval))
 
-  ## Objective function Q = mean(Q0 + Q1) (see Cerquera et al., 2014 page 4)
-  Q <- function (x, v0, v1, params, eta) {
-    # params <- gamma
-    f1 <- params[1]*1 + params[2]*v1 + params[3]*x
-    #Q1 <- sapply(f1, hausdorff_dist, Q=eta) * (f1 < eta)
-    # Q1 <- (f1 - eta)**2 * (f1 < eta)
-    Q1 <- abs(f1 - eta) * (f1 < eta)
-    #Q1 <- hausdorff(f1, eta) * (f1 < eta)
-    f0 <- params[1]*1 + params[2]*v0 + params[3]*x
-    #Q0 <- sapply(f0, hausdorff_dist, Q=eta) * (f0 > eta)
-    # Q0 <- (f0 - eta)**2 * (f0 > eta)
-    Q0 <- abs(f0 - eta) * (f0 > eta)
-    #Q0 <- hausdorff(f0, eta) * (f0 > eta)
-    return(mean(Q1 + Q0))
+    ## Objective function Q = mean(Q0 + Q1) (see Cerquera et al., 2014 page 4)
+    Q <- function (x, v0, v1, params, eta) {
+      # params <- gamma
+      f1 <- params[1]*1 + params[2]*v1 + params[3]*x
+      #Q1 <- sapply(f1, hausdorff_dist, Q=eta) * (f1 < eta)
+      # Q1 <- (f1 - eta)**2 * (f1 < eta)
+      Q1 <- abs(f1 - eta) * (f1 < eta)
+      #Q1 <- hausdorff(f1, eta) * (f1 < eta)
+      f0 <- params[1]*1 + params[2]*v0 + params[3]*x
+      #Q0 <- sapply(f0, hausdorff_dist, Q=eta) * (f0 > eta)
+      # Q0 <- (f0 - eta)**2 * (f0 > eta)
+      Q0 <- abs(f0 - eta) * (f0 > eta)
+      #Q0 <- hausdorff(f0, eta) * (f0 > eta)
+      return(mean(Q1 + Q0))
+    }
+
+    ## Optimization
+    Q_min <- optim(par=c(0, 0, 0), fn=Q, eta=eta, x=xn, v0=v0n, v1=v1n,
+      # lower=c(-2, 0, -2), upper=c(2, 2, 2), 
+      method='BFGS',
+      control=list(maxit=500, trace=6))
+
+    # Print Estimation results
+    print(round(Q_min$par, 2))
+
+    ## Q(true) <= min(Q) + epsilon_N
+    epsilon_N <- log(n)/n
+    Q_true <- Q(xn, v0n, v1n, gamma, eta)
+    (Q_true < (Q_min$value + epsilon_N))
+    print(paste0('Q_true: ', round(Q_true, 5), ' Q_min: ', round(Q_min$value, 2)))
+
+    ### Sweep the Reals
+    candidates <- expand.grid(
+      lapply(Q_min$par, FUN=function(x){seq(x - 1, x + 1, 0.01)})
+    )
+
+    # Get set C which Q(C) =< min(Q)
+    cl <- makeCluster(detectCores())
+    clusterExport(cl, varlist=ls())
+    C_star <- candidates[
+      parallel::parApply(cl=cl, candidates, 
+        FUN=function(c){(Q(xn, v0n, v1n, c, eta) <= (Q_min$value + epsilon_N))}, 
+        MARGIN=1)
+      , ]
+    stopCluster(cl)
+
+    temp <- cbind.data.frame(
+      sapply(C_star, max),
+      sapply(C_star, min),
+      var = c('intercept', 'x', 'v'),
+      mc = i,
+      n = n
+    )
+    mc_results(mc_results, temp)
   }
-
-  ## Optimization
-  Q_min <- optim(par=c(0, 0, 0), fn=Q, eta=eta, x=xn, v0=v0n, v1=v1n,
-    # lower=c(-2, 0, -2), upper=c(2, 2, 2), 
-    method='BFGS',
-    control=list(maxit=500, trace=6))
-
-  # Print Estimation results
-  print(round(Q_min$par, 2))
-
-  ## Q(true) <= min(Q) + epsilon_N
-  epsilon_N <- log(n)/n
-  Q_true <- Q(x, v0, v1, gamma, eta)
-  (Q_true < (Q_min$value + epsilon_N))
-  print(paste0('Q_true: ', round(Q_true, 5), ' Q_min: ', round(Q_min$value, 2)))
 }
 # }}}
 
@@ -103,22 +129,11 @@ for (j in 1:3) {
 }
 ### }}}
 
-### Sweep the Reals
-candidates <- expand.grid(
- lapply(Q_min$par, FUN=function(x){seq(x - 1, x + 1, 0.01)})
-)
-
-# Get set C which Q(C) =< min(Q)
-cl <- makeCluster(detectCores())
-clusterExport(cl, varlist=ls())
-C_star <- candidates[
- parallel::parApply(cl=cl, candidates, 
-   FUN=function(c){(Q(x, v0, v1, c, eta) <= (Q_min$value + epsilon_N))}, 
-   MARGIN=1)
- , ]
-stopCluster(cl)
 
 summary(C_star)
+
+
+
 
 # Another Approach -- Find Vertices
 
