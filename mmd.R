@@ -1,5 +1,5 @@
 library('np')
-library('parallel')
+# library('parallel')
 # library('pracma')
 # library('HDCD')
 library('readr')
@@ -37,7 +37,7 @@ pop <- data.frame(y, x, v0, v1)
 
 # Monte Carlo Simulation {{{
 mc_results <- data.frame()
-cl <- makeCluster(detectCores())
+# cl <- makeCluster(detectCores())
 for (n in ns) {
   for (i in 1:mc) {
     idx <- sample(N, n, replace=FALSE)
@@ -94,9 +94,14 @@ for (n in ns) {
     )
 
     # Get set C which Q(C) =< min(Q)
-    clusterExport(cl, varlist=ls())
+    # clusterExport(cl, varlist=ls())
+    # C_star <- candidates[
+    #   parallel::parApply(cl=cl, candidates, 
+    #     FUN=function(c){(Q(xn, v0n, v1n, c, eta) <= (Q_min$value + epsilon_N))}, 
+    #     MARGIN=1)
+    #   , ]
     C_star <- candidates[
-      parallel::parApply(cl=cl, candidates, 
+      apply(cl=cl, candidates, 
         FUN=function(c){(Q(xn, v0n, v1n, c, eta) <= (Q_min$value + epsilon_N))}, 
         MARGIN=1)
       , ]
@@ -111,7 +116,7 @@ for (n in ns) {
     mc_results <- rbind(mc_results, temp)
   }
 }
-stopCluster(cl)
+# stopCluster(cl)
 # }}}
 
 write_excel_csv(mc_results, file=paste0(path, '/data/mc_results.csv'), na='')

@@ -38,7 +38,6 @@ jobs:
           packages: |
             any::readr 
             any::np 
-            any::parallel
             any::dplyr
       # - name: Install dependencies
       #   run: |
