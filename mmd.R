@@ -101,7 +101,7 @@ for (n in ns) {
     #     MARGIN=1)
     #   , ]
     C_star <- candidates[
-      apply(cl=cl, candidates, 
+      apply(candidates, 
         FUN=function(c){(Q(xn, v0n, v1n, c, eta) <= (Q_min$value + epsilon_N))}, 
         MARGIN=1)
       , ]
