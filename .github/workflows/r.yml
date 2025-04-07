@@ -1,0 +1,62 @@
+# This workflow uses actions that are not certified by GitHub.
+# They are provided by a third-party and are governed by
+# separate terms of service, privacy policy, and support
+# documentation.
+#
+# See https://github.com/r-lib/actions/tree/master/examples#readme for
+# additional example workflows available for the R community.
+
+name: R
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        r-version: ['4.4.2']
+
+    steps:
+      - uses: actions/checkout@v4
+      # - if: runner.os == 'macOS'
+      #   run: brew install --cask xquartz
+      - name: Set up R ${{ matrix.r-version }}
+        uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: ${{ matrix.r-version }}
+      - name: Install packages
+        uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          packages: |
+            any::readr 
+            any::np 
+            any::parallel
+            any::dplyr
+      # - name: Install dependencies
+      #   run: |
+      #     install.packages(c("remotes", "rcmdcheck"))
+      #     remotes::install_deps(dependencies = TRUE)
+      #   shell: Rscript {0}
+      # - name: Check
+      #   run: rcmdcheck::rcmdcheck(args = "--no-manual", error_on = "error")
+      #   shell: Rscript {0}
+      - name: run code
+        run: Rscript mmd.R
+      - name: Commit
+        run: |
+          git config --local user.email "chan.hyuk.58@gmail.com"
+          git add .
+          git commit -m "monte_carlo"
+      - name: Push
+        uses: ad-m/github-push-action@master
+        with:
+          branch: 'master'
+          github_token: $ 
