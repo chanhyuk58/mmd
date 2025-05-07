@@ -1,9 +1,10 @@
 library('np')
-# library('parallel')
+library('parallel')
 # library('pracma')
 # library('HDCD')
 library('readr')
 library('dplyr')
+library('data.table')
 
 path <- getwd()
 
@@ -36,8 +37,7 @@ pop <- data.frame(y, x, v0, v1)
 # }}}
 
 # Monte Carlo Simulation {{{
-mc_results <- data.frame()
-# cl <- makeCluster(detectCores())
+mc_results <- data.table()
 for (n in ns) {
   for (i in 1:mc) {
     idx <- sample(N, n, replace=FALSE)
@@ -46,7 +46,7 @@ for (n in ns) {
     v0n <- pop[idx, 'v0']
     v1n <- pop[idx, 'v1']
 
-    X.eval <- data.frame(v0n, v1n, xn)
+    X.eval <- data.table(v0n, v1n, xn)
 
     # Estimation
     ## estimation of eta -- Nadaraya–Watson estimator
@@ -94,17 +94,18 @@ for (n in ns) {
     )
 
     # Get set C which Q(C) =< min(Q)
-    # clusterExport(cl, varlist=ls())
-    # C_star <- candidates[
-    #   parallel::parApply(cl=cl, candidates, 
-    #     FUN=function(c){(Q(xn, v0n, v1n, c, eta) <= (Q_min$value + epsilon_N))}, 
-    #     MARGIN=1)
-    #   , ]
+    cl <- makeCluster(detectCores())
+    clusterExport(cl, varlist=list(candidates, xn, v0n, v1n, c, eta, Q, Q_min, epsilon_N))
     C_star <- candidates[
-      apply(candidates, 
+      parallel::parApply(cl=cl, candidates, 
         FUN=function(c){(Q(xn, v0n, v1n, c, eta) <= (Q_min$value + epsilon_N))}, 
         MARGIN=1)
       , ]
+    # C_star <- candidates[
+    #   apply(candidates, 
+    #     FUN=function(c){(Q(xn, v0n, v1n, c, eta) <= (Q_min$value + epsilon_N))}, 
+    #     MARGIN=1)
+    #   , ]
 
     temp <- cbind.data.frame(
       sapply(C_star, max),
