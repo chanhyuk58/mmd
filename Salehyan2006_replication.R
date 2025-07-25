@@ -2,7 +2,7 @@ library('data.table')
 library('texreg')
 
 sg <- foreign::read.dta('../../gleditschsalehyan/R Replication/gleditsch_salehyan_correctedtime.dta')
-readr::write_excel_csv(sg, file='../sg.csv')
+readr::write_excel_csv(sg, file='../data/sg.csv')
 sg <- as.data.table(sg)
 head(sg)
 names(sg)
@@ -22,35 +22,57 @@ screenreg(t4m2) # Successful replication of the original result.
 #    - Maximum: From the formation of the country to that year.
 #    - Minimum: From the starting year of the dataset.
 
-## Merge with country formation year dataset
-# cow2iso <- fread('../data/cow2iso.csv')
-# cow2iso <- cow2iso[!is.na(cow_id), ]
-# cow2iso <- cow2iso[, .SD[which.min(valid_from)], cow_id][, .(cow_id, valid_from)]
-# # cow2iso[, order(.N), cow_id]
-# names(cow2iso) <- c('ccode', 'form_year')
+# Merge with country formation year dataset
+states2016 <- fread('../data/states2016.csv')
+head(states2016)
+states2016 <- states2016[!is.na(ccode), ]
+states2016 <- states2016[, .SD[which.min(styear)], ccode][, .(ccode, styear)]
+states2016[, order(.N), ccode]
 
-# sg <- merge(sg, cow2iso, by=c('ccode'), all.x=T)
+sg <- merge(sg, states2016, by=c('ccode'), all.x=T)
+head(sg)
+names(sg)
 
-## Subset data with `nonset` value
-sg1 <- sg[!is.na(nonset), ]
-
-# Index to separate two cases.
-indx_no_onset <- sg1[, sum(nonset) == 0, ccode][V1 == T, 1][[1]]
-
-### At least 1 civil war
-sg1_ex_onset <- sg1[!(ccode %in% indx_no_onset), ]
-# filter rows before the first recorded civil war.
-sg1_ex_onset <- sg1_ex_onset[sg1_ex_onset[, seq(.N) < which.max(nonset == 1), ccode][, V1], ]
-
-### No civil war
-sg1_no_onset <- sg1[(ccode %in% indx_no_onset), ]
-sg1_no_onset <- sg1_no_onset[, `:=`(
+## Based on `nonset`
+# two categories
+sg1_1 <- sg[!is.na(nonset), .SD[(seq(.N) <= which.max(nonset == 1) | sum(nonset) == 0), ], ccode
+  ][, `:=`(
   peace1_min = peace1,
-  peace1_max = 
-) ]
+  peace1_max = ifelse(year - styear > 0, year - styear, peace1)
+)]
+# other data points
+sg1_2 <- sg[!is.na(nonset), .SD[seq(.N) > which.max(nonset == 1) & sum(nonset) > 0, ], ccode
+  ][, `:=`(
+  peace1_min = peace1,
+  peace1_max = peace1
+)]
+# merge
+sg1 <- rbindlist(list(sg1_1, sg1_2))
+sg1 <- sg1[order(ccode, year), ]
+fwrite(sg1, file='../data/sg1.csv', bom=T)
 
+## Based on `bigconset2`
+# two categories
+sg1_1 <- sg1[!is.na(bigconset2), .SD[(seq(.N) <= which.max(bigconset2 == 1) | sum(bigconset2) == 0), ], ccode
+  ][, `:=`(
+  peace2_min = peace2,
+  peace2_max = ifelse(year - styear > 0, year - styear, peace2)
+)]
+# other data points
+sg1_2 <- sg1[!is.na(bigconset2), .SD[seq(.N) > which.max(bigconset2 == 1) & sum(bigconset2) > 0, ], ccode
+  ][, `:=`(
+  peace2_min = peace2,
+  peace2_max = peace2
+)]
+# merge
+sg1 <- rbindlist(list(sg1_1, sg1_2))
+sg1 <- sg1[order(ccode, year), ]
+fwrite(sg1, file='../data/sg1.csv', bom=T)
 
+sg1[, which(nonset != bigconset2)]
+(sg1$peace1 != sg1$peace2)
+(sg1$peace1_max != sg1$peace2_max)
 
-sg[, peace1_max := peace1, ccode]
-sg[sg[, which(nonset == 1), ccode]$V1, peace1_max := NA, ccode]
-sg[ccode== 20,head(.SD, 10), , .SDcols=c('peace1_max', 'peace1', 'nonset')]
+names(sg1)
+
+## Run MMD
