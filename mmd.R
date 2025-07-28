@@ -16,7 +16,8 @@ ns <- c(200, 800, 1500)       # Sample size
 
 # Population {{{
 ## Truth
-gamma <- c(1, 1, -1)
+#gamma <- c(1, 1, -1)
+gamma <- c(1, 1, rep(-1, 5))
 # v <- rnorm(n, 0, 2)
 v <- runif(N, -2, 3) # try uniform distribution
 
@@ -24,13 +25,15 @@ v <- runif(N, -2, 3) # try uniform distribution
 v1 = ceiling(v)
 v0 <- v1 - 1
 # x <- rnorm(n, 1, 4)
-x <- runif(N, 0, 5) # try uniform distribution
-
+# x <- runif(N, 0, 5) # try uniform distribution
+# multivariate uniform distribution
+d <- 5
+x <- matrix(runif(N * d), nrow = N, ncol = d)
 ## Error
 eps <- rnorm(N, 0, 1)
 
 ## y
-y <- gamma[1] + gamma[2]*v + gamma[3]*x + eps
+y <- gamma[1] + gamma[2]*v + x %*% gamma[3:length(gamma)] + eps
 
 ## pop
 pop <- data.frame(y, x, v0, v1)
@@ -238,3 +241,71 @@ mc_results %>%
 
 
 
+# For multidimensional X
+
+d <- ncol(pop$x[[1]])  # or just set d directly
+param_len <- 2 + d  # gamma0, gamma1, gamma_x1, ..., gamma_xd
+
+for (n in ns) {
+  for (i in 1:mc) {
+    idx <- sample(N, n, replace=FALSE)
+    yn <- pop[idx, 'y'][[1]]
+    xn <- do.call(rbind, pop[idx, 'x'])  # convert list column to matrix
+    v0n <- pop[idx, 'v0'][[1]]
+    v1n <- pop[idx, 'v1'][[1]]
+
+    X.eval <- data.table(v0n, v1n, xn)
+
+    # Estimation
+    bw <- np::npregbw(yn ~ v0n + v1n + xn, regtype='lc') 
+    model <- npreg(bws = bw, gradients = TRUE)  
+    eta <- as.matrix(predict(model, newdata=X.eval))
+
+    # Objective function
+    Q <- function (x, v0, v1, params, eta) {
+      gamma0 <- params[1]
+      gamma1 <- params[2]
+      gammax <- params[3:(2 + ncol(x))]
+      f1 <- gamma0 + gamma1 * v1 + as.vector(x %*% gammax)
+      f0 <- gamma0 + gamma1 * v0 + as.vector(x %*% gammax)
+      Q1 <- abs(f1 - eta) * (f1 < eta)
+      Q0 <- abs(f0 - eta) * (f0 > eta)
+      return(mean(Q1 + Q0))
+    }
+
+    Q_min <- optim(
+      par=rep(0, param_len),
+      fn=Q, eta=eta, x=xn, v0=v0n, v1=v1n,
+      method='BFGS', control=list(maxit=500)
+    )
+
+    print(round(Q_min$par, 2))
+
+    epsilon_N <- log(n)/n
+    Q_true <- Q(xn, v0n, v1n, gamma, eta)
+    print(paste0('Q_true: ', round(Q_true, 5), ' Q_min: ', round(Q_min$value, 2)))
+
+    # Expand grid
+    candidates <- expand.grid(
+      lapply(Q_min$par, function(x) seq(x - 1, x + 1, 0.1))
+    )
+
+    cl <- parallel::makeCluster(parallel::detectCores())
+    parallel::clusterExport(cl, varlist=c("candidates", "xn", "v0n", "v1n", "eta", "Q", "Q_min", "epsilon_N"), envir=environment())
+    C_star <- candidates[
+      parallel::parApply(cl, candidates, MARGIN=1,
+                         FUN=function(cand) Q(xn, v0n, v1n, cand, eta) <= (Q_min$value + epsilon_N)),
+      ]
+    parallel::stopCluster(cl)
+
+    temp <- data.frame(
+      upper = apply(C_star, 2, max),
+      lower = apply(C_star, 2, min),
+      var = c("intercept", "v", paste0("x", 1:d)),
+      mc = i,
+      n = n
+    )
+
+    mc_results <- rbind(mc_results, temp)
+  }
+}
