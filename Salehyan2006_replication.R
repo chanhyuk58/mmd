@@ -1,5 +1,5 @@
 library('data.table')
-library('texreg')
+# library('texreg')
 
 sg <- foreign::read.dta('../../gleditschsalehyan/R Replication/gleditsch_salehyan_correctedtime.dta')
 readr::write_excel_csv(sg, file='../data/sg.csv')
@@ -12,7 +12,8 @@ names(sg)
 
 ## Replication
 t4m2=glm(nonset~logref2+nbcwbin+polityb+polityb2+lngdp+lnpop+het+peace1+s1a+s2a+s3a ,family=binomial(link="logit"), data=sg)
-screenreg(t4m2) # Successful replication of the original result.
+# screenreg(t4m2) # Successful replication of the original result.
+summary(t4m2) # Successful replication of the original result.
 
 ## Get Min Max
 
@@ -76,3 +77,17 @@ sg1[, which(nonset != bigconset2)]
 names(sg1)
 
 ## Run MMD
+source("mmd_cpp.R")
+
+gleditschsalehyan1 <- MMD_bounds_cpp(
+  nonset ~ logref2 + nbcwbin + polityb + polityb2 + lngdp + het
+  v0 = "peace1_min",
+  v1 = "peace1_max",
+  data = sg1
+)
+
+print(gleditschsalehyan1$par_opt)
+print(gleditschsalehyan1$lower)
+print(gleditschsalehyan1$upper)
+
+print(summary(gleditschsalehyan))

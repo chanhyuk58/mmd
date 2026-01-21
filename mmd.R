@@ -10,9 +10,9 @@ path <- getwd()
 
 # Simulation Sample
 set.seed(63130)
-N <- 10**6 # Population size
-mc <- 100      # Number of MC iteration
-ns <- c(200, 800, 1500)       # Sample size
+N <- 10**3 # Population size
+mc <- 1      # Number of MC iteration
+ns <- c(100)       # Sample size
 
 # Population {{{
 ## Truth
@@ -45,16 +45,16 @@ for (n in ns) {
   for (i in 1:mc) {
     idx <- sample(N, n, replace=FALSE)
     yn <- pop[idx, 'y']
-    xn <- pop[idx, 'x']
+    xn <- pop[idx, c('X1', 'X2', 'X3', 'X4', 'X5')]
     v0n <- pop[idx, 'v0']
     v1n <- pop[idx, 'v1']
 
-    X.eval <- data.table(v0n, v1n, xn)
+    X.eval <- pop[idx, -1]
 
     # Estimation
     ## estimation of eta -- Nadaraya–Watson estimator
     ### estimate the bandwidth first
-    bw <- np::npregbw(yn ~ v0n + v1n + xn, regtype='lc') 
+    bw <- np::npregbw(y ~ v0 + v1 + X1 + X2 + X3 + X4 + X5, data = pop[idx, ], regtype='lc') 
 
     ### estimate eta Kernel regression
     model <- npreg(bws = bw, gradients = TRUE)  
@@ -64,6 +64,7 @@ for (n in ns) {
     Q <- function (x, v0, v1, params, eta) {
       # params <- gamma
       f1 <- params[1]*1 + params[2]*v1 + params[3]*x
+      #f1 <- params[1]*1 + params[2]*v1 + x %*% params[-c(1,2)]
       #Q1 <- sapply(f1, hausdorff_dist, Q=eta) * (f1 < eta)
       # Q1 <- (f1 - eta)**2 * (f1 < eta)
       Q1 <- abs(f1 - eta) * (f1 < eta)
@@ -123,7 +124,7 @@ for (n in ns) {
 # stopCluster(cl)
 # }}}
 
-write_excel_csv(mc_results, file=paste0(path, '/data/mc_results.csv'), na='')
+write_excel_csv(mc_results, file='../data/mc_results.csv', na='')
 
 mc_results %>%
   group_by(var, n) %>%
@@ -133,7 +134,7 @@ mc_results %>%
 mc_results %>%
   group_by(var, n) %>%
   summarize(across(everything(), mean), .groups='drop') %>%
-  write_excel_csv(file=paste0(path, '/data/mean.csv'), na='')
+  write_excel_csv(file='../data/mean.csv', na='')
 
 # ### Graph -- holding other coef fixed {{{
 # beta <- expand.grid(
