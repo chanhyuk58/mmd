@@ -25,14 +25,14 @@ summary(t4m2) # Successful replication of the original result.
 
 # Merge with country formation year dataset
 states2016 <- fread('../data/states2016.csv')
-head(states2016)
+# head(states2016)
 states2016 <- states2016[!is.na(ccode), ]
 states2016 <- states2016[, .SD[which.min(styear)], ccode][, .(ccode, styear)]
 states2016[, order(.N), ccode]
 
 sg <- merge(sg, states2016, by=c('ccode'), all.x=T)
-head(sg)
-names(sg)
+# head(sg)
+# names(sg)
 
 ## Based on `nonset`
 # two categories
@@ -70,24 +70,21 @@ sg1 <- rbindlist(list(sg1_1, sg1_2))
 sg1 <- sg1[order(ccode, year), ]
 fwrite(sg1, file='../data/sg1.csv', bom=T)
 
-sg1[, which(nonset != bigconset2)]
-(sg1$peace1 != sg1$peace2)
-(sg1$peace1_max != sg1$peace2_max)
+# sg1[, which(nonset != bigconset2)]
+# (sg1$peace1 != sg1$peace2)
+# (sg1$peace1_max != sg1$peace2_max)
 
 names(sg1)
 
 ## Run MMD
 source("mmd_cpp.R")
 
+
 gleditschsalehyan1 <- MMD_bounds_cpp(
-  nonset ~ logref2 + nbcwbin + polityb + polityb2 + lngdp + het
+  nonset ~ logref2 + nbcwbin + polityb + polityb2 + lngdp + het,
   v0 = "peace1_min",
   v1 = "peace1_max",
-  data = sg1
+  data = na.omit(sg1[,c("nonset", "logref2", "nbcwbin", "polityb", "polityb2", "lngdp", "het", "peace1_min", "peace1_max")])
 )
 
-print(gleditschsalehyan1$par_opt)
-print(gleditschsalehyan1$lower)
-print(gleditschsalehyan1$upper)
-
-print(summary(gleditschsalehyan))
+print(summary(gleditschsalehyan1))
