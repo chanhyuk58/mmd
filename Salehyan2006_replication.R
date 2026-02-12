@@ -1,13 +1,15 @@
-library('data.table')
-# library('texreg')
+library("data.table")
+library("xtable")
+# library("texreg")
+source("mmd_cpp.R")
 
-sg <- foreign::read.dta('../../gleditschsalehyan/R Replication/gleditsch_salehyan_correctedtime.dta')
-readr::write_excel_csv(sg, file='../data/sg.csv')
+sg <- foreign::read.dta("../../gleditschsalehyan/R Replication/gleditsch_salehyan_correctedtime.dta")
+readr::write_excel_csv(sg, file="../data/sg.csv")
 sg <- as.data.table(sg)
 head(sg)
 names(sg)
 
-# outcome: nonset / bigconset civil war onset at the year. based on the definition of 'war'
+# outcome: nonset / bigconset civil war onset at the year. based on the definition of "war"
 # explanatory: peace1 peace time duration. This is the left-censored var.
 
 ## Replication
@@ -24,13 +26,13 @@ summary(t4m2) # Successful replication of the original result.
 #    - Minimum: From the starting year of the dataset.
 
 # Merge with country formation year dataset
-states2016 <- fread('../data/states2016.csv')
+states2016 <- fread("../data/states2016.csv")
 # head(states2016)
 states2016 <- states2016[!is.na(ccode), ]
 states2016 <- states2016[, .SD[which.min(styear)], ccode][, .(ccode, styear)]
-states2016[, order(.N), ccode]
+# states2016[, order(.N), ccode]
 
-sg <- merge(sg, states2016, by=c('ccode'), all.x=T)
+sg <- merge(sg, states2016, by=c("ccode"), all.x=T)
 # head(sg)
 # names(sg)
 
@@ -50,7 +52,7 @@ sg1_2 <- sg[!is.na(nonset), .SD[seq(.N) > which.max(nonset == 1) & sum(nonset) >
 # merge
 sg1 <- rbindlist(list(sg1_1, sg1_2))
 sg1 <- sg1[order(ccode, year), ]
-fwrite(sg1, file='../data/sg1.csv', bom=T)
+fwrite(sg1, file="../data/sg1.csv", bom=T)
 
 ## Based on `bigconset2`
 # two categories
@@ -68,23 +70,51 @@ sg1_2 <- sg1[!is.na(bigconset2), .SD[seq(.N) > which.max(bigconset2 == 1) & sum(
 # merge
 sg1 <- rbindlist(list(sg1_1, sg1_2))
 sg1 <- sg1[order(ccode, year), ]
-fwrite(sg1, file='../data/sg1.csv', bom=T)
+fwrite(sg1, file="../data/sg1.csv", bom=T)
+
+# Histogram of Max Peace Years
+pdf(width = 5, height = 5, file = "./hist_peace_years.pdf")
+hist(sg1$peace1_max)
+dev.off()
 
 # sg1[, which(nonset != bigconset2)]
 # (sg1$peace1 != sg1$peace2)
 # (sg1$peace1_max != sg1$peace2_max)
 
-names(sg1)
+sg1 <- fread("../data/sg1.csv")
 
 ## Run MMD
-source("mmd_cpp.R")
 
+Xs <- c("nonset", "logref2", "nbcwbin", "polityb", "polityb2", "lngdp", "lnpop", "het", "peace1_min", "peace1_max")
+colnames <- c("Intercept", "Peace Years", "Log Refugees", "Neighbor Civil War", "Polity", "Polity Squared", "Log GDP", "Ethnic Heterogeneity")
 
+# The Most Conservative Bounds
 gleditschsalehyan1 <- MMD_bounds_cpp(
   nonset ~ logref2 + nbcwbin + polityb + polityb2 + lngdp + het,
   v0 = "peace1_min",
   v1 = "peace1_max",
-  data = na.omit(sg1[,c("nonset", "logref2", "nbcwbin", "polityb", "polityb2", "lngdp", "het", "peace1_min", "peace1_max")])
+  data = na.omit(sg1[ ,..Xs])
 )
 
 print(summary(gleditschsalehyan1))
+
+tab <- cbind(colnames, summary(gleditschsalehyan1)$stats)
+print(xtable(tab), include.rownames = FALSE, file = "../data/Salehyan_mmd_the_most_conservative.csv")
+
+# Ceiling at 30?
+
+sg1 <- fread("../data/sg1.csv")
+sg2 <- copy(sg1)
+sg2 <- sg2[, peace1_max := ifelse(peace1_max >= 30, 30, peace1_max)]
+
+gleditschsalehyan2 <- MMD_bounds_cpp(
+  nonset ~ logref2 + nbcwbin + polityb + polityb2 + lngdp + het,
+  v0 = "peace1_min",
+  v1 = "peace1_max",
+  data = na.omit(sg2[ ,..Xs])
+)
+
+print(summary(gleditschsalehyan2))
+
+tab <- cbind(colnames, summary(gleditschsalehyan2)$stats)
+print(xtable(tab), include.rownames = FALSE, file = "../data/Salehyan_mmd_ceiling_at30.csv")
