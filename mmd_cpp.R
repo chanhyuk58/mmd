@@ -151,34 +151,168 @@ print.summary.mmd_bounds <- function(x, ...) {
 # Small demo
 # ------------------------------
 if (FALSE) {
-  # example simulation
-  set.seed(63130)
-  N <- 10**4 # Population size
 
-  # Population {{{
-  ## Truth
-  #gamma <- c(1, 1, -1)
-  gamma <- c(1, 2, rep(-1, 5))
-  v <- rnorm(N, 0, 2)
-  # v <- runif(N, -2, 3) # try uniform distribution
+  generate_data <- function(J, T_full, T_obs, beta_0, beta_1, beta_2, # {{{
+                            gamma_1, gamma_2, gamma_3, rho_x1_t) {
   
-  ## Observed
-  v1 = ceiling(v)
-  v0 <- v1 - 1
-  # x <- rnorm(n, 1, 4)
-  # x <- runif(N, 0, 5) # try uniform distribution
-  # multivariate uniform distribution
-  d <- 5
-  x <- matrix(runif(N * d), nrow = N, ncol = d)
-  ## Error
-  eps <- rnorm(N, 0, 1)
+    T_start <- T_full - T_obs + 1
   
-  ## y
-  y <- gamma[1] + gamma[2]*v + x %*% gamma[3:length(gamma)] + eps
+    # ── Country-level latent variable that creates X1-duration correlation ──
+    Z <- rnorm(J, 0, 1)
   
-  ## pop
-  pop <- data.frame(y, x, v0, v1)
+    # ── Generate X1 (correlated with duration via Z) and X2 (independent) ──
+    # X1 depends on Z: countries with higher Z have higher X1
+    # Z also affects the hazard (through X1), creating the correlation
+    X1 <- rho_x1_t * Z + sqrt(1 - rho_x1_t^2) * rnorm(J, 0, 1)
+    X2 <- rnorm(J, 0, 1)
+  
+    # ── Simulate event histories for each country ──
+    # We build the panel year by year: for each country-year, compute Pr(event),
+    # draw the outcome, and update the duration counter.
+  
+    records <- list()
+  
+    for (j in 1:J) {
+      t_star <- 0  # True time since last event (or since country "birth")
+  
+      for (year in 1:T_full) {
+        # Linear predictor
+        linpred <- beta_0 + beta_1 * X1[j] + beta_2 * X2[j] +
+                   gamma_1 * t_star + gamma_2 * t_star^2 + gamma_3 * t_star^3
+  
+        # Probability of event (logistic CDF)
+        prob <- 1 / (1 + exp(-linpred))
+  
+        # Draw outcome
+        y <- rbinom(1, 1, prob)
+  
+        # Record this observation
+        records[[length(records) + 1]] <- data.frame(
+          country = j, year = year, y = y,
+          X1 = X1[j], X2 = X2[j],
+          t_star = t_star,   # True duration-to-date
+          Z = Z[j]
+        )
+  
+        # Update duration counter
+        if (y == 1) {
+          t_star <- 0  # Reset after event
+        } else {
+          t_star <- t_star + 1
+        }
+      }
+    }
+  
+    full_data <- bind_rows(records)
+  
+    # ── Now create the "observed" data: only years T_start to T_full ──
+    obs_data <- full_data %>% filter(year >= T_start)
+  
+    # ── Code the duration as the researcher would ──
+    # The researcher starts t at 0 for each country in the first observed year,
+    # and resets to 0 after each observed event.
+    obs_data <- obs_data %>%
+      group_by(country) %>%
+      mutate(
+        # Identify events in the observed window
+        event_cumsum = cumsum(lag(y, default = 0)),
+        # For the first spell (before any observed event), t starts at 0
+        # For subsequent spells, t resets after each event
+        spell_id = event_cumsum,
+        t_coded = ave(seq_along(y), spell_id, FUN = function(x) seq_along(x) - 1)
+      ) %>%
+      ungroup()
+  
+    # ── Identify left-censored spells ──
+    # A spell is left-censored if it's the first spell for a country AND
+  
+    # the country existed before T_start AND no event happened in year T_start-1
+    # (i.e., we don't know when the previous event was).
+    # In our setup, every country exists from year 1, so the first spell is
+    # censored unless an event happened in year T_start - 1 or the country
+    # had its time counter at 0 in year T_start.
+  
+    obs_data <- obs_data %>%
+      group_by(country) %>%
+      mutate(
+        is_first_spell = (spell_id == 0),
+        # The spell is censored if t* > t in the first observed year
+        first_year_t_star = t_star[1],
+        first_year_t_coded = t_coded[1],
+        is_left_censored = is_first_spell & (first_year_t_star > first_year_t_coded)
+      ) %>%
+      ungroup()
+  
+    # ── Compute spell-level information for the auxiliary model ──
+    # For uncensored spells: we know the full spell length
+    # For left-censored spells: we only know the coded portion
+  
+    spell_info <- obs_data %>%
+      group_by(country, spell_id) %>%
+      summarize(
+        X1 = first(X1),
+        X2 = first(X2),
+        Z  = first(Z),
+        is_left_censored = first(is_left_censored),
+        spell_length_coded = max(t_coded) + 1,  # Coded spell length
+        spell_length_true  = max(t_star) - min(t_star) + 1, # True spell length within window
+        # True total spell length (including pre-window portion)
+        t_star_at_start = min(t_star),
+        t_star_at_end   = max(t_star),
+        ended_with_event = last(y) == 1,
+        # The true measurement error for this spell
+        tau = ifelse(is_left_censored, first(t_star) - first(t_coded), 0),
+        .groups = "drop"
+      )
+  
+    # For uncensored complete spells, the true spell length = t* at event + 1
+    # We need complete uncensored spells for the auxiliary model
+    spell_info <- spell_info %>%
+      mutate(
+        # Total true duration of the spell (for uncensored spells)
+        true_total_duration = t_star_at_end + 1,
+        # Is this spell "complete" (ended with an event)?
+        is_complete = ended_with_event,
+        # For the survival model: observed duration and censoring indicator
+        surv_time = ifelse(!is_left_censored,
+                           spell_length_coded,
+                           spell_length_coded),
+        surv_event = as.integer(ended_with_event)
+      )
+  
+    # Country age (years since "birth" = year 1 in our simulation)
+    obs_data <- obs_data %>%
+      mutate(country_age = T_full)  # All countries exist from year 1
+  
+    return(list(
+      obs_data   = obs_data,
+      full_data  = full_data,
+      spell_info = spell_info,
+      X1 = X1, X2 = X2
+    ))
+  }
   # }}}
+
+
+  # Get a Sample
+  set.seed(63130)
+  dat <- generate_data(J, T_full, T_obs, beta_0, beta_1, beta_2,
+                       gamma_1, gamma_2, gamma_3, rho_x1_t)
+  
+  obs  <- dat$obs_data
+  spells <- dat$spell_info
+  
+  cat("── Dataset Summary ──\n")
+  cat("Total observations:", nrow(obs), "\n")
+  cat("Events (y=1):", sum(obs$y), "(", round(100*mean(obs$y), 1), "%)\n")
+  cat("Left-censored observations:", sum(obs$is_left_censored),
+      "(", round(100*mean(obs$is_left_censored), 1), "%)\n")
+  cat("\n── Spell Summary ──\n")
+  cat("Total spells:", nrow(spells), "\n")
+  cat("Left-censored spells:", sum(spells$is_left_censored), "\n")
+  cat("Uncensored complete spells:", sum(!spells$is_left_censored & spells$is_complete), "\n")
+  cat("Uncensored right-censored spells:", sum(!spells$is_left_censored & !spells$is_complete), "\n")
+
 
   fit <- MMD_bounds_cpp(y ~ X1 + X2 + X3 + X4 + X5, 
     data = pop, v0_col = "v0", v1_col = "v1")
