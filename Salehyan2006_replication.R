@@ -3,6 +3,12 @@ library("xtable")
 # library("texreg")
 source("mmd_cpp.R")
 
+# Identified the coding error for the peace1 year interval.
+# peace1_max > peace1_min does not hold for every sample.
+# Probably due to the year of state's establishment is defined 
+# differently across the data. Thus, naive calculation based on 
+# one data causes errors.
+
 sg <- foreign::read.dta("../../gleditschsalehyan/R Replication/gleditsch_salehyan_correctedtime.dta")
 readr::write_excel_csv(sg, file="../data/sg.csv")
 sg <- as.data.table(sg)
@@ -160,6 +166,13 @@ colnames <- c("Intercept", "Peace Years", "Log Refugees", "Neighbor Civil War", 
 
 # # The Most Conservative Bounds
 sg1 <- fread("../data/sg1_most_conserv.csv")
+print(mean(sg1$nonset))
+length(unique(sg1$stateid))
+length(unique(sg1$year))
+
+summary(sg1$peace1_max - sg1$peace1_min)
+sg1[sg1$peace1_max < sg1$peace1_min, c("stateid", "year", "peace1", "peace1_max", "peace1_min")]
+
 # gleditschsalehyan1 <- MMD_bounds_cpp(
 #   nonset ~ logref2 + nbcwbin + polityb + polityb2 + lngdp + het,
 #   v0 = "peace1_min",

@@ -1,10 +1,7 @@
-# Note: np::npreg is used for eta; the optimizer and bound-finder are implemented in C++.
-
 library(Rcpp)
 library(np)
-library(data.table)
-library(readr)
 library(dplyr)
+library(nloptr)
 
 # ------------------------------
 # C++ code compiled via Rcpp
@@ -16,21 +13,19 @@ Rcpp::sourceCpp("./mmd_cpp.cpp")
 # ------------------------------
 # v0_col, v1_col: numeric vectors length n. the minimum and the maximum of unknown v.
 
-MMD_bounds_cpp <- function(formula, data, v0_col, v1_col,
-                           box_radius = 1.0,
-                           bfgs_maxiter = 1000,
-                           bfgs_gtol = 1e-6,
-                           bfgs_ftol = 1e-12,
-                           bisect_iter = 60,
-                           verbose = FALSE) {
+MMD_bounds <- function(formula, data, v0_col, v1_col,
+                       alpha = 0.05,            # Critical value
+                       B = 200,                 # Bootstrap reps for CI calculation
+                       b_exponent = 0.8,        # Proportion of sample used for bootstrap CI
+                       verbose = TRUE) {
   
-  # 1. Process Formula and Data
+  # --- 1. Data Preparation ---
   cl <- match.call()
-  mf <- model.frame(formula, data)
-  y <- model.response(mf)
+  if(verbose) cat(">> [1/5] Preparing data...\n")
   
-  # We extract the model matrix but FORCE removal of intercept because
-  # the C++ code handles the intercept separately as pptr[0] (gamma0).
+  mf <- model.frame(formula, data)
+  y  <- as.numeric(model.response(mf)) 
+  
   full_x_mat <- model.matrix(formula, mf)
   intercept_idx <- which(colnames(full_x_mat) == "(Intercept)")
   
@@ -42,279 +37,209 @@ MMD_bounds_cpp <- function(formula, data, v0_col, v1_col,
   
   v0 <- data[[v0_col]]
   v1 <- data[[v1_col]]
+  n <- nrow(x_mat)
+  d <- ncol(x_mat)
   
-  n <- as.integer(length(y))
-  d <- as.integer(ncol(x_mat))
-  p <- 2 + d # [gamma0, gammaV, beta_x1, ..., beta_xd]
-
-  # 2. Estimate eta (Nuisance Parameter)
-  # For eta = E[Y | v0, v1, X], we use all observed information.
-  # We use the clean x_mat (no constant intercept) to avoid the np warning.
-  df_np <- data.frame(yn = as.numeric(y), v0 = as.numeric(v0), v1 = as.numeric(v1))
-  if (d > 0) {
-    df_np <- cbind(df_np, as.data.frame(x_mat))
+  param_names <- c("(Intercept)", paste0("latent_", v0_col), colnames(x_mat))
+  p <- length(param_names)
+  
+  # --- 2. Nuisance Parameter Estimation (eta) ---
+  if(verbose) cat(">> [2/5] Estimating nuisance parameter eta...\n")
+  
+  df_np <- data.frame(yn = y, v0 = v0, v1 = v1)
+  if (d > 0) df_np <- cbind(df_np, as.data.frame(x_mat))
+  fml_np <- as.formula(paste("yn ~", paste(names(df_np)[-1], collapse = " + ")))
+  
+  # May tweak bwmethod for speed. Currently get it from CV.
+  bw <- np::npregbw(fml_np, data = df_np, regtype = "lc", bwmethod = "cv.aic") 
+  model_eta <- np::npreg(bws = bw)
+  eta <- fitted(model_eta)
+  
+  # --- 3. Unconstrained Minimization (Point Estimates) ---
+  if(verbose) cat(">> [3/5] Finding unconstrained sample minimum...\n")
+  
+  obj_fun_R <- function(par) {
+    Q_obj_cpp(as.matrix(x_mat), as.numeric(v0), as.numeric(v1), par, as.numeric(eta))
   }
   
-  # Construct formula for np: yn ~ v0 + v1 + x1 + ...
-  rhs_np <- c("v0", "v1", colnames(x_mat))
-  fml_np <- reformulate(rhs_np, response = "yn")
-
-  if(verbose) cat("Estimating eta via nonparametric regression...\n")
-  bw <- np::npregbw(fml_np, data = df_np, regtype = "lc")
-  model_eta <- np::npreg(bws = bw)
-  eta <- as.numeric(predict(model_eta, newdata = df_np[, -1, drop = FALSE]))
-
-  # 3. Optimization (C++)
-  par0 <- rep(0, p)
-  if(verbose) cat("Starting BFGS optimization...\n")
-  opt <- bfgs_opt_cpp(as.matrix(x_mat), as.numeric(v0), as.numeric(v1), as.numeric(eta),
-                      par0,
-                      maxiter = as.integer(bfgs_maxiter),
-                      gtol = bfgs_gtol,
-                      ftol = bfgs_ftol)
-
-  par_opt <- as.numeric(opt$par)
-  Q_min <- as.numeric(opt$value)
-  threshold <- Q_min + (log(n) / n)
-
-  # 4. Bounds via Bisection (C++)
-  if(verbose) cat("Computing coordinate-wise bounds...\n")
-  bounds_res <- coord_bounds_bisect_cpp(as.matrix(x_mat),
-                                        as.numeric(v0), as.numeric(v1), as.numeric(eta),
-                                        par_opt,
-                                        threshold,
-                                        box_radius = as.numeric(box_radius),
-                                        max_bisect_iter = as.integer(bisect_iter),
-                                        tol = 1e-8)
-
-  # 5. Result Construction
-  # Mapping names: [gamma0, gammaV, x_covariates]
-  coeff_names <- c("(Intercept)", paste0("latent_", v0_col, "_", v1_col), colnames(x_mat))
-  names(par_opt) <- coeff_names
+  init_par <- rep(0, p)
+  opt_unconstr <- optim(init_par, obj_fun_R, method = "Nelder-Mead", control = list(maxit = 5000))
   
+  Q_min_hat <- opt_unconstr$value
+  theta_hat <- opt_unconstr$par 
+  
+  if(verbose) cat(sprintf("       Sample Minimum Q_n = %.6f\n", Q_min_hat))
+  
+  # --- 4. Subsampling (CONDITIONAL ON B > 0) ---
+  # Bootstrap subsampling is needed to use Kaidd, Molinari, and Stoyse (2019) framework.
+  # c_alpha is the thresholds.
+  c_alpha <- NA
+  tau_CI <- NA
+  
+  if (B > 0) {
+    if(verbose) cat(">> [4/5] Subsampling for critical values (B =", B, ")...\n")
+    
+    b_size <- floor(n^b_exponent)
+    W_stats <- numeric(B)
+    
+    obj_fun_sub_R <- function(par, indices_0_based) {
+      Q_obj_subsample_cpp(as.matrix(x_mat), as.numeric(v0), as.numeric(v1), 
+                          par, as.numeric(eta), indices_0_based)
+    }
+    
+    for(i in 1:B) {
+      idx <- sample(0:(n-1), b_size, replace = FALSE)
+      
+      # We restart optim from theta_hat for speed
+      opt_sub <- optim(theta_hat, obj_fun_sub_R, indices_0_based = idx, 
+                       method = "Nelder-Mead", control = list(maxit = 500))
+      
+      Q_b_min <- opt_sub$value
+      Q_b_theta_hat <- obj_fun_sub_R(theta_hat, idx)
+      
+      W_stats[i] <- b_size * (Q_b_theta_hat - Q_b_min)
+    }
+    
+    # Thresholds obtained
+    c_alpha <- quantile(W_stats, probs = 1 - alpha, names = FALSE)
+    tau_CI <- Q_min_hat + (c_alpha / n)
+    
+    if(verbose) cat(sprintf("       c_alpha (95%%) = %.4f\n", c_alpha))
+  } else {
+    if(verbose) cat(">> [4/5] Skipping subsampling (B=0). CI will not be computed.\n")
+  }
+  
+  # --- 5. Projection Method ---
+  if(verbose) cat(">> [5/5] Running projections...\n")
+  
+  # Thresholds for Identified Set: log(n) / n -> From Chernozhukov et al. (2017)
+  epsilon_n <- log(n) / n
+  tau_ID <- Q_min_hat + epsilon_n
+  
+  bounds_ID <- matrix(NA, nrow = p, ncol = 2, dimnames = list(param_names, c("Lower", "Upper")))
+  bounds_CI <- matrix(NA, nrow = p, ncol = 2, dimnames = list(param_names, c("Lower", "Upper")))
+  
+  opts <- list("algorithm" = "NLOPT_LN_COBYLA", "xtol_rel" = 1.0e-4, "maxeval" = 1000)
+  
+  # Loop over parameters
+  # Using constrained optimization, we find bounds for each parameter. 
+  # Thus we have to loop k times. 
+  for(k in 1:p) {
+    eval_f_min <- function(x) { x[k] }
+    eval_f_max <- function(x) { -x[k] }
+    
+    # --- A. Estimated Identified Set ---
+    eval_g_ID <- function(x) { obj_fun_R(x) - tau_ID }
+    
+    res_L_ID <- nloptr(x0 = theta_hat, eval_f = eval_f_min, eval_g_ineq = eval_g_ID, opts = opts)
+    res_U_ID <- nloptr(x0 = theta_hat, eval_f = eval_f_max, eval_g_ineq = eval_g_ID, opts = opts)
+    
+    bounds_ID[k, 1] <- res_L_ID$objective
+    bounds_ID[k, 2] <- -res_U_ID$objective 
+    
+    # --- B. Confidence Interval (Only if B > 0) ---
+    if (B > 0 && !is.na(tau_CI)) {
+      eval_g_CI <- function(x) { obj_fun_R(x) - tau_CI }
+      
+      res_L_CI <- nloptr(x0 = theta_hat, eval_f = eval_f_min, eval_g_ineq = eval_g_CI, opts = opts)
+      res_U_CI <- nloptr(x0 = theta_hat, eval_f = eval_f_max, eval_g_ineq = eval_g_CI, opts = opts)
+      
+      bounds_CI[k, 1] <- res_L_CI$objective
+      bounds_CI[k, 2] <- -res_U_CI$objective
+    }
+  }
+  
+  # --- 6. Compile Results ---
   res <- list(
-    coefficients = par_opt,
-    bounds = data.frame(
-      lower = as.numeric(bounds_res$lower),
-      upper = as.numeric(bounds_res$upper),
-      row.names = coeff_names
-    ),
-    Q_min = Q_min,
-    threshold = threshold,
+    param_names = param_names,
+    point_est = theta_hat, 
+    bounds_ID = as.data.frame(bounds_ID),
+    bounds_CI = as.data.frame(bounds_CI), # Might contain NAs if B=0
+    Q_min = Q_min_hat,
+    thresholds = c(ID = tau_ID, CI = tau_CI),
     n = n,
-    call = cl,
-    convergence = opt$conv
+    alpha = alpha,
+    B = B, # Store B to check later in summary
+    call = cl
   )
   
-  class(res) <- "mmd_bounds"
+  class(res) <- "mmd_results"
   return(res)
 }
 
-# ------------------------------
-# S3 Methods
-# ------------------------------
+# ------------------------------------------------------------------------------
+# 3. S3 Methods
+# ------------------------------------------------------------------------------
 
-print.mmd_bounds <- function(x, ...) {
-  cat("\nCall:\n", paste(deparse(x$call), sep = "\n", collapse = "\n"), "\n\n", sep = "")
-  cat("Coefficients:\n")
-  print(x$coefficients)
-  cat("\nMinimum Q:", round(x$Q_min, 6), "\n")
-}
-
-summary.mmd_bounds <- function(object, ...) {
-  ans <- list(
-    call = object$call,
-    stats = data.frame(
-      Estimate = object$coefficients,
-      Lower_Bound = object$bounds$lower,
-      Upper_Bound = object$bounds$upper
-    ),
-    Q_min = object$Q_min,
-    n = object$n,
-    conv = object$convergence
-  )
-  class(ans) <- "summary.mmd_bounds"
-  return(ans)
-}
-
-print.summary.mmd_bounds <- function(x, ...) {
-  cat("\nCall:\n", paste(deparse(x$call), sep = "\n", collapse = "\n"), "\n\n", sep = "")
+print.mmd_results <- function(x, ...) {
+  cat("\nModified Minimum Distance Estimator (Manski-Tamer)\n")
+  cat("--------------------------------------------------\n")
+  cat("Call:\n", paste(deparse(x$call), sep = "\n", collapse = "\n"), "\n\n", sep = "")
   cat("Sample Size: ", x$n, "\n")
-  cat("Optimization converged:", x$conv, "\n")
-  cat("Minimum Q:   ", round(x$Q_min, 6), "\n\n")
-  cat("Point Estimates and Identification Bounds:\n")
-  print(x$stats)
+  cat("Min Q(theta):", round(x$Q_min, 6), "\n\n")
+  
+  cat("Estimated Identified Set:\n")
+  print(round(x$bounds_ID, 4))
+  
+  if (x$B > 0) {
+    cat("\n95% Confidence Intervals:\n")
+    print(round(x$bounds_CI, 4))
+  } else {
+    cat("\n(Confidence Intervals not computed because B=0)\n")
+  }
   cat("\n")
 }
 
-# ------------------------------
-# Small demo
-# ------------------------------
-if (FALSE) {
-
-  generate_data <- function(J, T_full, T_obs, beta_0, beta_1, beta_2, # {{{
-                            gamma_1, gamma_2, gamma_3, rho_x1_t) {
-  
-    T_start <- T_full - T_obs + 1
-  
-    # ── Country-level latent variable that creates X1-duration correlation ──
-    Z <- rnorm(J, 0, 1)
-  
-    # ── Generate X1 (correlated with duration via Z) and X2 (independent) ──
-    # X1 depends on Z: countries with higher Z have higher X1
-    # Z also affects the hazard (through X1), creating the correlation
-    X1 <- rho_x1_t * Z + sqrt(1 - rho_x1_t^2) * rnorm(J, 0, 1)
-    X2 <- rnorm(J, 0, 1)
-  
-    # ── Simulate event histories for each country ──
-    # We build the panel year by year: for each country-year, compute Pr(event),
-    # draw the outcome, and update the duration counter.
-  
-    records <- list()
-  
-    for (j in 1:J) {
-      t_star <- 0  # True time since last event (or since country "birth")
-  
-      for (year in 1:T_full) {
-        # Linear predictor
-        linpred <- beta_0 + beta_1 * X1[j] + beta_2 * X2[j] +
-                   gamma_1 * t_star + gamma_2 * t_star^2 + gamma_3 * t_star^3
-  
-        # Probability of event (logistic CDF)
-        prob <- 1 / (1 + exp(-linpred))
-  
-        # Draw outcome
-        y <- rbinom(1, 1, prob)
-  
-        # Record this observation
-        records[[length(records) + 1]] <- data.frame(
-          country = j, year = year, y = y,
-          X1 = X1[j], X2 = X2[j],
-          t_star = t_star,   # True duration-to-date
-          Z = Z[j]
-        )
-  
-        # Update duration counter
-        if (y == 1) {
-          t_star <- 0  # Reset after event
-        } else {
-          t_star <- t_star + 1
-        }
-      }
-    }
-  
-    full_data <- bind_rows(records)
-  
-    # ── Now create the "observed" data: only years T_start to T_full ──
-    obs_data <- full_data %>% filter(year >= T_start)
-  
-    # ── Code the duration as the researcher would ──
-    # The researcher starts t at 0 for each country in the first observed year,
-    # and resets to 0 after each observed event.
-    obs_data <- obs_data %>%
-      group_by(country) %>%
-      mutate(
-        # Identify events in the observed window
-        event_cumsum = cumsum(lag(y, default = 0)),
-        # For the first spell (before any observed event), t starts at 0
-        # For subsequent spells, t resets after each event
-        spell_id = event_cumsum,
-        t_coded = ave(seq_along(y), spell_id, FUN = function(x) seq_along(x) - 1)
-      ) %>%
-      ungroup()
-  
-    # ── Identify left-censored spells ──
-    # A spell is left-censored if it's the first spell for a country AND
-  
-    # the country existed before T_start AND no event happened in year T_start-1
-    # (i.e., we don't know when the previous event was).
-    # In our setup, every country exists from year 1, so the first spell is
-    # censored unless an event happened in year T_start - 1 or the country
-    # had its time counter at 0 in year T_start.
-  
-    obs_data <- obs_data %>%
-      group_by(country) %>%
-      mutate(
-        is_first_spell = (spell_id == 0),
-        # The spell is censored if t* > t in the first observed year
-        first_year_t_star = t_star[1],
-        first_year_t_coded = t_coded[1],
-        is_left_censored = is_first_spell & (first_year_t_star > first_year_t_coded)
-      ) %>%
-      ungroup()
-  
-    # ── Compute spell-level information for the auxiliary model ──
-    # For uncensored spells: we know the full spell length
-    # For left-censored spells: we only know the coded portion
-  
-    spell_info <- obs_data %>%
-      group_by(country, spell_id) %>%
-      summarize(
-        X1 = first(X1),
-        X2 = first(X2),
-        Z  = first(Z),
-        is_left_censored = first(is_left_censored),
-        spell_length_coded = max(t_coded) + 1,  # Coded spell length
-        spell_length_true  = max(t_star) - min(t_star) + 1, # True spell length within window
-        # True total spell length (including pre-window portion)
-        t_star_at_start = min(t_star),
-        t_star_at_end   = max(t_star),
-        ended_with_event = last(y) == 1,
-        # The true measurement error for this spell
-        tau = ifelse(is_left_censored, first(t_star) - first(t_coded), 0),
-        .groups = "drop"
-      )
-  
-    # For uncensored complete spells, the true spell length = t* at event + 1
-    # We need complete uncensored spells for the auxiliary model
-    spell_info <- spell_info %>%
-      mutate(
-        # Total true duration of the spell (for uncensored spells)
-        true_total_duration = t_star_at_end + 1,
-        # Is this spell "complete" (ended with an event)?
-        is_complete = ended_with_event,
-        # For the survival model: observed duration and censoring indicator
-        surv_time = ifelse(!is_left_censored,
-                           spell_length_coded,
-                           spell_length_coded),
-        surv_event = as.integer(ended_with_event)
-      )
-  
-    # Country age (years since "birth" = year 1 in our simulation)
-    obs_data <- obs_data %>%
-      mutate(country_age = T_full)  # All countries exist from year 1
-  
-    return(list(
-      obs_data   = obs_data,
-      full_data  = full_data,
-      spell_info = spell_info,
-      X1 = X1, X2 = X2
-    ))
+summary.mmd_results <- function(object, ...) {
+  # May only include identified set bounds 
+  if (object$B > 0) {
+    tab <- data.frame(
+      Point_Est = object$point_est,
+      ID_Lower = object$bounds_ID$Lower,
+      ID_Upper = object$bounds_ID$Upper,
+      CI_Lower = object$bounds_CI$Lower,
+      CI_Upper = object$bounds_CI$Upper
+    )
+  } else {
+    tab <- data.frame(
+      Point_Est = object$point_est,
+      ID_Lower = object$bounds_ID$Lower,
+      ID_Upper = object$bounds_ID$Upper
+    )
   }
-  # }}}
-
-
-  # Get a Sample
-  set.seed(63130)
-  dat <- generate_data(J, T_full, T_obs, beta_0, beta_1, beta_2,
-                       gamma_1, gamma_2, gamma_3, rho_x1_t)
   
-  obs  <- dat$obs_data
-  spells <- dat$spell_info
+  ans <- list(
+    call = object$call,
+    n = object$n,
+    Q_min = object$Q_min,
+    thresholds = object$thresholds,
+    table = tab,
+    alpha = object$alpha,
+    B = object$B
+  )
+  class(ans) <- "summary.mmd_results"
+  return(ans)
+}
+
+print.summary.mmd_results <- function(x, ...) {
+  cat("\n=================================================================\n")
+  cat(" MMD ESTIMATION RESULTS (Projection Method)\n")
+  cat("=================================================================\n")
+  cat("Sample Size:   ", x$n, "\n")
+  cat("Min Objective: ", sprintf("%.6f", x$Q_min), "\n")
   
-  cat("── Dataset Summary ──\n")
-  cat("Total observations:", nrow(obs), "\n")
-  cat("Events (y=1):", sum(obs$y), "(", round(100*mean(obs$y), 1), "%)\n")
-  cat("Left-censored observations:", sum(obs$is_left_censored),
-      "(", round(100*mean(obs$is_left_censored), 1), "%)\n")
-  cat("\n── Spell Summary ──\n")
-  cat("Total spells:", nrow(spells), "\n")
-  cat("Left-censored spells:", sum(spells$is_left_censored), "\n")
-  cat("Uncensored complete spells:", sum(!spells$is_left_censored & spells$is_complete), "\n")
-  cat("Uncensored right-censored spells:", sum(!spells$is_left_censored & !spells$is_complete), "\n")
-
-
-  fit <- MMD_bounds_cpp(y ~ X1 + X2 + X3 + X4 + X5, 
-    data = pop, v0_col = "v0", v1_col = "v1")
-  summary(fit)
+  if (x$B > 0) {
+    cat("Thresholds:    ID =", sprintf("%.6f", x$thresholds["ID"]), 
+        " | CI =", sprintf("%.6f", x$thresholds["CI"]), "\n")
+  } else {
+    cat("Thresholds:    ID =", sprintf("%.6f", x$thresholds["ID"]), 
+        " | CI = NA (B=0)\n")
+  }
+  
+  cat("Confidence Lvl:", (1 - x$alpha) * 100, "%\n\n")
+  
+  cat("Parameter Bounds:\n")
+  print(round(x$table, 4))
+  cat("\n")
+  cat("=================================================================\n")
 }
