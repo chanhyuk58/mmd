@@ -3,16 +3,21 @@ library(np)
 library(nloptr)     
 library(stats)
 
-# 1. Load C++ Backend
-Rcpp::sourceCpp("mmd_cpp.cpp")
+if(file.exists("mmd_cpp.cpp")) {
+  Rcpp::sourceCpp("mmd_cpp.cpp")
+} else {
+  stop("Error: 'mmd_cpp.cpp' not found.")
+}
 
-# 2. Main Estimation Function
-MMD_bounds <- function(formula, data, v0_col, v1_col,  # {{{
+MMD_bounds <- function(formula, data, v0_col, v1_col,
                        method = c("projection", "grid"),
-                       grid_list = NULL,
-                       alpha = 0.05,           # Critical value
-                       B = 200,                # Subsample rep for CI 
-                       b_exponent = 0.8,       # Subsample proportion for CI
+                       grid_radius = 0.05,   
+                       alpha = 0.05,
+                       B = 200, 
+                       b_exponent = 0.8,
+                       n_starts = 5,         
+                       param_bounds = 100,   # Projection bounds
+                       K_folds = 5,          # eta Cross-Fitting
                        verbose = TRUE) {
   
   method <- match.arg(method)
@@ -31,38 +36,78 @@ MMD_bounds <- function(formula, data, v0_col, v1_col,  # {{{
   param_names <- c("(Intercept)", paste0("latent_", v0_col), colnames(x_mat))
   p <- length(param_names)
   
-  # --- 2. Nuisance Parameter (eta) ---
-  # nonparametric kernel regression using np package
-  if(verbose) cat(">> [2/5] Estimating eta (E[Y|X,V])...\n")
+  # --- 2. Nuisance Parameter (eta) via CROSS-FITTING ---
+  if(verbose) cat(sprintf(">> [2/5] Estimating eta via %d-Fold Cross-Fitting...\n", K_folds))
   df_np <- data.frame(yn = y, v0 = v0, v1 = v1)
   if (d > 0) df_np <- cbind(df_np, as.data.frame(x_mat))
   fml_np <- as.formula(paste("yn ~", paste(names(df_np)[-1], collapse = " + ")))
+  
+  # eta calculation
   bw <- np::npregbw(fml_np, data = df_np, regtype = "lc", bwmethod = "cv.aic") 
-  eta <- fitted(np::npreg(bws = bw))
   
-  # --- 3. Whole Sample Minimum for Q ---
-  if(verbose) cat(">> [3/5] Finding unconstrained sample minimum...\n")
+  folds <- sample(rep(1:K_folds, length.out = n))
+  eta <- numeric(n)
+  
+  for(k in 1:K_folds) {
+    train_df <- df_np[folds != k, , drop = FALSE]
+    test_df  <- df_np[folds == k, , drop = FALSE]
+    
+    mod_k <- np::npreg(bws = bw, txdat = train_df[,-1], tydat = train_df[,1])
+    eta[folds == k] <- predict(mod_k, newdata = test_df[,-1])
+  }
+  
+  # --- 3. Sample Minimum (Multi-Start Subplex) ---
+  if(verbose) cat(sprintf(">> [3/5] Finding global sample minimum (%d starts)...\n", n_starts))
   obj_fun_R <- function(par) Q_obj_cpp(as.matrix(x_mat), v0, v1, par, eta)
-  opt_unconstr <- optim(rep(0, p), obj_fun_R, method = "Nelder-Mead", control = list(maxit = 5000))
-  Q_min_hat <- opt_unconstr$value
-  theta_hat <- opt_unconstr$par 
   
-  # --- 4. Subsampling for CI ---
+  opts_unconstr <- list("algorithm" = "NLOPT_LN_SBPLX", "xtol_rel" = 1e-7, "maxeval" = 10000)
+  
+  best_Q <- Inf
+  best_theta <- rep(0, p)
+  
+  for(i in 1:n_starts) {
+    start_val <- if(i == 1) rep(0, p) else rnorm(p, 0, 0.5)
+    
+    opt <- nloptr(x0 = start_val, eval_f = obj_fun_R, opts = opts_unconstr)
+    
+    if(opt$objective < best_Q) {
+      best_Q <- opt$objective
+      best_theta <- opt$solution
+    }
+  }
+  Q_min_hat <- best_Q
+  theta_hat <- best_theta 
+  names(theta_hat) <- param_names
+  
+  if(verbose) cat(sprintf("       Global Sample Minimum (Q_min_hat) = %.6f\n", Q_min_hat))
+  
+  # --- 4. Subsampling for CI (BOBYQA) ---
+  # This follows the projection method proposed by Kaido, Molinari, and Stoye 2019
   tau_CI <- NA
   if (B > 0) {
     if(verbose) cat(">> [4/5] Subsampling for critical values...\n")
     b_size <- floor(n^b_exponent); W_stats <- numeric(B)
+    
+    opts_sub <- list("algorithm" = "NLOPT_LN_BOBYQA", "xtol_rel" = 1e-5, "maxeval" = 1000)
+    
     for(i in 1:B) {
       idx <- sample(0:(n-1), b_size, replace = FALSE)
-      Q_b_min <- optim(theta_hat, function(p) Q_obj_subsample_cpp(as.matrix(x_mat), v0, v1, p, eta, idx), 
-                       method = "Nelder-Mead", control = list(maxit = 500))$value
-      Q_b_theta <- Q_obj_subsample_cpp(as.matrix(x_mat), v0, v1, theta_hat, eta, idx)
+      
+      # Find subsample minimum starting from theta_hat
+      # This replaces global Q_min. Standard practice.
+      sub_obj <- function(p) Q_obj_subsample_cpp(as.matrix(x_mat), v0, v1, p, eta, idx)
+      opt_sub <- nloptr(x0 = theta_hat, eval_f = sub_obj, opts = opts_sub)
+      Q_b_min <- opt_sub$objective
+      
+      # Evaluate at full-sample estimate
+      Q_b_theta <- sub_obj(theta_hat)
       W_stats[i] <- b_size * (Q_b_theta - Q_b_min)
     }
     tau_CI <- Q_min_hat + (quantile(W_stats, 1 - alpha, names = FALSE) / n)
   }
   
   tau_ID <- Q_min_hat + (log(n) / n)
+  if(verbose) cat(sprintf("       Threshold (tau_ID) = %.6f\n", tau_ID))
   
   # --- 5. Estimation Branching ---
   bounds_ID <- matrix(NA, p, 2, dimnames = list(param_names, c("Lower", "Upper")))
@@ -70,37 +115,67 @@ MMD_bounds <- function(formula, data, v0_col, v1_col,  # {{{
   
   if (method == "projection") {
     if(verbose) cat(">> [5/5] Running Projection Method (nloptr)...\n")
-    opts <- list("algorithm" = "NLOPT_LN_COBYLA", "xtol_rel" = 1e-4, "maxeval" = 1000)
+    opts_proj <- list("algorithm" = "NLOPT_LN_COBYLA", "xtol_rel" = 1e-6, "maxeval" = 5000)
+    
+    # Bounded projections to prevent infinite sets
+    lb <- rep(-param_bounds, p)
+    ub <- rep(param_bounds, p)
+    
     for(k in 1:p) {
-      # ID Set
-      bounds_ID[k, 1] <- nloptr(theta_hat, function(x) x[k], eval_g_ineq = function(x) obj_fun_R(x)-tau_ID, opts=opts)$objective
-      bounds_ID[k, 2] <- -nloptr(theta_hat, function(x) -x[k], eval_g_ineq = function(x) obj_fun_R(x)-tau_ID, opts=opts)$objective
-      # CI
+      bounds_ID[k, 1] <- nloptr(theta_hat, function(x) x[k], eval_g_ineq = function(x) obj_fun_R(x)-tau_ID, lb=lb, ub=ub, opts=opts_proj)$objective
+      bounds_ID[k, 2] <- -nloptr(theta_hat, function(x) -x[k], eval_g_ineq = function(x) obj_fun_R(x)-tau_ID, lb=lb, ub=ub, opts=opts_proj)$objective
       if (B > 0) {
-        bounds_CI[k, 1] <- nloptr(theta_hat, function(x) x[k], eval_g_ineq = function(x) obj_fun_R(x)-tau_CI, opts=opts)$objective
-        bounds_CI[k, 2] <- -nloptr(theta_hat, function(x) -x[k], eval_g_ineq = function(x) obj_fun_R(x)-tau_CI, opts=opts)$objective
+        bounds_CI[k, 1] <- nloptr(theta_hat, function(x) x[k], eval_g_ineq = function(x) obj_fun_R(x)-tau_CI, lb=lb, ub=ub, opts=opts_proj)$objective
+        bounds_CI[k, 2] <- -nloptr(theta_hat, function(x) -x[k], eval_g_ineq = function(x) obj_fun_R(x)-tau_CI, lb=lb, ub=ub, opts=opts_proj)$objective
       }
     }
   } else {
-    if(verbose) cat(">> [5/5] Running Grid Search (Baseline)...\n")
-    if(is.null(grid_list)) stop("grid_list required for grid search.")
+    if(verbose) cat(">> [5/5] Running 3-Step Adaptive Grid Search...\n")
     
-    # Create Grid
-    full_grid <- as.matrix(expand.grid(grid_list))
-    if(verbose) cat("       Grid size:", nrow(full_grid), "points.\n")
+    generate_local_grids <- function(centers_mat, radius, pts_per_dim) {
+      offsets <- as.matrix(expand.grid(rep(list(seq(-radius, radius, length.out = pts_per_dim)), p)))
+      C_rep <- centers_mat[rep(1:nrow(centers_mat), each = nrow(offsets)), , drop=FALSE]
+      O_rep <- offsets[rep(1:nrow(offsets), times = nrow(centers_mat)), , drop=FALSE]
+      return(unique(C_rep + O_rep))
+    }
     
-    # Evaluate Grid in C++
-    q_values <- Q_eval_grid_cpp(as.matrix(x_mat), v0, v1, full_grid, eta)
+    # --- STEP 1: Coarse Grid  ---
+    r1 <- grid_radius; pts1 <- 5
+    grid1 <- generate_local_grids(matrix(theta_hat, nrow=1), r1, pts1)
+    q1 <- Q_eval_grid_cpp(as.matrix(x_mat), v0, v1, grid1, eta)
     
-    # Filter and find bounds
-    id_points <- full_grid[q_values <= tau_ID, , drop=FALSE]
+    # Prune based on quantiles
+    q_range1 <- max(q1) - min(q1)
+    thresh1 <- max(tau_ID, min(q1) + 0.05 * q_range1)
+    top_50_val <- sort(q1)[min(length(q1), 50)]
+    survivors1 <- grid1[q1 <= max(thresh1, top_50_val), , drop=FALSE]
+    
+    # --- STEP 2: Medium Grid ---
+    r2 <- r1 / (pts1 - 1); pts2 <- 3
+    grid2 <- generate_local_grids(survivors1, r2, pts2)
+    q2 <- Q_eval_grid_cpp(as.matrix(x_mat), v0, v1, grid2, eta)
+    
+    # prune again
+    q_range2 <- max(q2) - min(q2)
+    thresh2 <- max(tau_ID, min(q2) + 0.01 * q_range2)
+    top_50_val2 <- sort(q2)[min(length(q2), 50)]
+    survivors2 <- grid2[q2 <= max(thresh2, top_50_val2), , drop=FALSE]
+    
+    # --- STEP 3: Fine Grid ---
+    r3 <- r2 / (pts2 - 1); pts3 <- 3
+    grid3 <- generate_local_grids(survivors2, r3, pts3)
+    q3 <- Q_eval_grid_cpp(as.matrix(x_mat), v0, v1, grid3, eta)
+    
+    id_points <- grid3[q3 <= tau_ID, , drop=FALSE]
     if(nrow(id_points) > 0) {
       bounds_ID[, 1] <- apply(id_points, 2, min)
       bounds_ID[, 2] <- apply(id_points, 2, max)
+    } else {
+      warning("No points met the strict tau_ID threshold in Step 3. Returning NAs.")
     }
     
     if (B > 0) {
-      ci_points <- full_grid[q_values <= tau_CI, , drop=FALSE]
+      ci_points <- grid3[q3 <= tau_CI, , drop=FALSE]
       if(nrow(ci_points) > 0) {
         bounds_CI[, 1] <- apply(ci_points, 2, min)
         bounds_CI[, 2] <- apply(ci_points, 2, max)
@@ -114,9 +189,11 @@ MMD_bounds <- function(formula, data, v0_col, v1_col,  # {{{
   class(res) <- "mmd_results"
   return(res)
 }
-# }}}
 
+# ------------------------------------------------------------------------------
 # 3. S3 Methods
+# ------------------------------------------------------------------------------
+
 print.mmd_results <- function(x, ...) {
   cat("\nMMD Estimator (Method:", x$method, ")\n")
   cat("Min Q:", round(x$Q_min, 6), "| n:", x$n, "\n\n")
