@@ -13,17 +13,6 @@ for (i in 1:mc) {
     T_full = 100, # Max true duration / history
     birth_range = c(1, 50),
     obs_start_range = c(50, 60),
-    beta_0 = 0.2, 
-    gamma_v = -0.05, 
-    beta_gdp = 0.00, 
-    beta_democ = 0.00, 
-    beta_eth = 0.00,
-    beta_pop = 0.05,
-    beta_ref = 0.00,
-    # beta_democ = -0.05, 
-    # beta_eth = 0.02,
-    # beta_pop = 0.05,
-    # beta_ref = 0.05,
   )$data
   # head(pop)
   print(sum(pop$onset))
@@ -32,16 +21,6 @@ for (i in 1:mc) {
   txtdensity((pop$v1 - pop$v0))
 
   # Estimate bounds
-  stp <- 0.01
-  grid_list <- list(
-    "(Intercept)" = seq(-0.1, 0.4, stp),
-    "latent_v0"  = seq(-0.2, 0.1, stp),
-    "log_gdp"   = seq(-0.0, 0.0, stp),
-    "democ"     = seq(-0.0, 0.0, stp),
-    "eth_het"   = seq(-0.0, 0.0, stp),
-    "log_pop"   = seq(-0.1, 0.2, stp),
-    "log_ref"   = seq(-0.0, 0.0, stp)
-  )
   bounds_projection <- MMD_bounds(
     onset ~ log_gdp + democ + eth_het + log_pop + log_ref, 
     data = pop, v0_col = "v0", v1_col = "v1",
