@@ -66,3 +66,6 @@ for (i in 1:mc) {
   save(bounds_projection, file = paste("./projection", "_", Sys.Date(), ".rda"))
   save(bounds_grid, file = paste("./grid", "_", Sys.Date(), ".rda"))
 }
+
+proc.time()
+gc()
