@@ -148,8 +148,9 @@ gen_pop <- function(
 
 gen_pop_simple <- function(
                            n = 1000,
-                           gamma = c(1, 1, rep(-1, p)),
+                           p = 5
                            ){
+    gamma = c(1, 1, rep(-1, p))
     v <- runif(n, -2, 3) # try uniform distribution
 
     ## Observed
