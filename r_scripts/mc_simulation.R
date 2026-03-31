@@ -42,17 +42,27 @@ for (i in 1:mc) {
     "log_pop"   = seq(-0.1, 0.2, stp),
     "log_ref"   = seq(-0.0, 0.0, stp)
   )
-  method <- "projection"
-  bounds <- MMD_bounds(
+  bounds_projection <- MMD_bounds(
     onset ~ log_gdp + democ + eth_het + log_pop + log_ref, 
     data = pop, v0_col = "v0", v1_col = "v1",
-    method = method,
+    method = "projection",
     # grid_list = grid_list,
     alpha = 0.05,            # Critical value
     B = 0,                 # Bootstrap reps for CI calculation
     # b_exponent = 0.8,        # Proportion of sample used for bootstrap CI
     verbose = TRUE
   )
-  print(bounds)
-  save(bounds, file = paste("./", method, "_", Sys.Date(), ".rda"))
+  bounds_grid <- MMD_bounds(
+    onset ~ log_gdp + democ + eth_het + log_pop + log_ref, 
+    data = pop, v0_col = "v0", v1_col = "v1",
+    method = "grid",
+    alpha = 0.05,            # Critical value
+    B = 0,                 # Bootstrap reps for CI calculation
+    # b_exponent = 0.8,        # Proportion of sample used for bootstrap CI
+    verbose = TRUE
+  )
+  print(bounds_projection)
+  print(bounds_grid)
+  save(bounds_projection, file = paste("./projection", "_", Sys.Date(), ".rda"))
+  save(bounds_grid, file = paste("./grid", "_", Sys.Date(), ".rda"))
 }
