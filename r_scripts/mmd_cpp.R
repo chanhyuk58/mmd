@@ -32,9 +32,9 @@ MMD_bounds <- function(formula, data, v0_col, v1_col,
   intercept_idx <- which(colnames(full_x_mat) == "(Intercept)")
   x_mat <- if(length(intercept_idx) > 0) full_x_mat[, -intercept_idx, drop=FALSE] else full_x_mat
   
-  valid_rows <- rownames(mf)
-  v0 <- data[valid_rows, v0_col]
-  v1 <- data[valid_rows, v1_col]
+  valid_idx <- as.integer(rownames(mf))
+  v0 <- as.numeric(data[[v0_col]][valid_idx])
+  v1 <- as.numeric(data[[v1_col]][valid_idx])
   
   n <- nrow(x_mat); d <- ncol(x_mat)
   param_names <- c("(Intercept)", paste0("latent_", v0_col), colnames(x_mat))
@@ -55,13 +55,20 @@ MMD_bounds <- function(formula, data, v0_col, v1_col,
   for(k in 1:K_folds) {
     train_df <- df_np[folds != k, , drop = FALSE]
     test_df  <- df_np[folds == k, , drop = FALSE]
-    mod_k <- np::npreg(bws = raw_bws, txdat = train_df[,-1], tydat = train_df[,1])
-    eta[folds == k] <- predict(mod_k, newdata = test_df[,-1])
+    
+    # Train model
+    mod_k <- np::npreg(bws = raw_bws, txdat = train_df[, -1, drop = FALSE], tydat = train_df[, 1])
+    
+    # Validate
+    pred_vals <- as.numeric(predict(mod_k, newdata = test_df[, -1, drop = FALSE]))
+    eta[folds == k] <- pred_vals
   }
-  
+
   # --- 3. Sample Minimum (Multi-Start Subplex) ---
   if(verbose) cat(sprintf(">> [3/5] Finding global sample minimum (%d starts)...\n", n_starts))
-  obj_fun_R <- function(par) Q_obj_cpp(as.matrix(x_mat), v0, v1, par, eta)
+  obj_fun_R <- function(par) {
+    Q_obj_cpp(as.matrix(x_mat), as.numeric(v0), as.numeric(v1), as.numeric(par), as.numeric(eta))
+  }
   
   opts_unconstr <- list("algorithm" = "NLOPT_LN_SBPLX", "xtol_rel" = 1e-7, "maxeval" = 10000)
   best_Q <- Inf; best_theta <- rep(0, p)
