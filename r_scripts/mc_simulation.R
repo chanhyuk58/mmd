@@ -43,6 +43,8 @@ for (i in 1:mc) {
     onset ~ log_gdp + democ + eth_het + log_pop + log_ref, 
     data = pop, v0_col = "v0", v1_col = "v1",
     method = "grid",
+    grid_radius = 1.0,      # This is more than enough for LPM model, since beta =< 1
+    grid_points = 10000,    # Eval Points for each Parameters
     alpha = 0.05,            # Critical value
     B = 0,                 # Bootstrap reps for CI calculation
     # b_exponent = 0.8,        # Proportion of sample used for bootstrap CI
