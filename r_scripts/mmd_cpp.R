@@ -12,7 +12,7 @@ if(file.exists("mmd_cpp.cpp")) {
 MMD_bounds <- function(formula, data, v0_col, v1_col,
                        method = c("projection", "profile"),
                        grid_radius = 1.0,       # Decides the size of candidates
-                       grid_points = NULL,    # Eval Points for each Parameters
+                       grid_points = 10000,    # Eval Points for each Parameters
                        alpha = 0.05,
                        B = 200, 
                        b_exponent = 0.8,
@@ -21,9 +21,6 @@ MMD_bounds <- function(formula, data, v0_col, v1_col,
                        K_folds = 5,          
                        verbose = TRUE) {
   
-  if (grid_points == NULL) {
-      grid_points <- 1 / (grid_radius * 0.001)
-  }
   method <- match.arg(method)
   cl <- match.call()
   
