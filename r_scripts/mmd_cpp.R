@@ -10,7 +10,7 @@ if(file.exists("mmd_cpp.cpp")) {
 }
 
 MMD_bounds <- function(formula, data, v0_col, v1_col,
-                       method = c("projection", "profile"),
+                       method = c("projection", "grid"),
                        grid_radius = 1.0,       # Decides the size of candidates
                        grid_points = 10000,    # Eval Points for each Parameters
                        alpha = 0.05,
