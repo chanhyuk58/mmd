@@ -25,17 +25,23 @@ MMD_bounds <- function(formula, data, v0_col, v1_col,
   method <- match.arg(method)
   cl <- match.call()
   
-  # --- 1. Data Preparation (NA-Safe) ---
+  # --- 1. Data Preparation ---
   if(verbose) cat(">> [1/5] Preparing data...\n")
-  mf <- model.frame(formula, data)
-  y  <- as.numeric(model.response(mf)) 
+  
+  fml_full <- update(formula, paste("~ . +", v0_col, "+", v1_col))
+  mf <- model.frame(fml_full, data)
+  
+  # Extract Y
+  y <- as.numeric(model.response(mf)) 
+  
+  # Extract X matrix
   full_x_mat <- model.matrix(formula, mf)
   intercept_idx <- which(colnames(full_x_mat) == "(Intercept)")
   x_mat <- if(length(intercept_idx) > 0) full_x_mat[, -intercept_idx, drop=FALSE] else full_x_mat
   
-  valid_rows <- rownames(mf)
-  v0 <- as.numeric(data[valid_rows, v0_col])
-  v1 <- as.numeric(data[valid_rows, v1_col])
+  # Extract v0 and v1
+  v0 <- as.numeric(mf[[v0_col]])
+  v1 <- as.numeric(mf[[v1_col]])
   
   n <- nrow(x_mat); d <- ncol(x_mat)
   param_names <- c("(Intercept)", paste0("latent_", v0_col), colnames(x_mat))
