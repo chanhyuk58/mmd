@@ -11,12 +11,22 @@ mc <- 1
 
 for (i in 1:mc) {
   # Create a population
-  pop <- gen_pop(
-    J = 100, # Count of countries
-    T_full = 100, # Max true duration / history
-    birth_range = c(1, 50),
-    obs_start_range = c(50, 60),
-  )$data
+    pop <- gen_pop(
+                   J = 100, # Count of countries
+                   T_full = 100, # Max true duration / history
+                   birth_range = c(1, 50),
+                   obs_start_range = c(50, 60),
+                   beta_0 = 0.2, 
+                   beta_gdp = -0.10, 
+                   beta_democ = -0.05, 
+                   beta_eth = 0.02,
+                   beta_pop = 0.05,
+                   beta_ref = 0.05,
+                   beta_v = -0.02, 
+                   mean_gdp = 8.5,
+                   mean_pop = 16.0,
+                   gdp_shock = 0.05,
+                   )$data
   # head(pop)
   cat("Head of population:\n")
   print(head(pop))

@@ -12,7 +12,7 @@ gen_pop <- function(
   beta_eth = 0.02,
   beta_pop = 0.05,
   beta_ref = 0.05,
-  gamma_v = -0.02, 
+  beta_v = -0.02, 
   mean_gdp = 8.5,
   mean_pop = 16.0,
   gdp_shock = 0.05,
@@ -95,7 +95,7 @@ gen_pop <- function(
                   beta_eth * eth_het_vec[active] +
                   beta_pop * log_pop[act] +
                   beta_ref * log_ref[act] +
-                  gamma_v * true_duration[act]
+                  beta_v * true_duration[act]
       
       # Clamp probabilities to [0, 1]
       probs <- pmin(pmax(lin_pred, 0), 1)
@@ -135,7 +135,7 @@ gen_pop <- function(
   
   true_params <- c(
     "(Intercept)" = beta_0,
-    "latent_v" = gamma_v, 
+    "latent_v" = beta_v, 
     "log_gdp" = beta_gdp,
     "democ" = beta_democ,
     "eth_het" = beta_eth,
