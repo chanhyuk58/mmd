@@ -41,7 +41,8 @@ MMD_bounds <- function(formula, data, v0_col, v1_col,
   param_names <- c("(Intercept)", paste0("latent_", v0_col), colnames(x_mat))
   p <- length(param_names)
   
-  # --- 1b. INVISIBLE FULL STANDARDIZATION ---
+  # --- 1b. Invisible Full Standardization ---
+  if(verbose) cat(">> [1b/5] Invisible standardization...\n")
   mu_v <- mean(c(v0, v1), na.rm = TRUE)
   sd_v <- sd(c(v0, v1), na.rm = TRUE)
   if(sd_v == 0 || is.na(sd_v)) sd_v <- 1.0
