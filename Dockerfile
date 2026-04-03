@@ -13,8 +13,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Install R packages
 RUN R -e "options(Ncpus = parallel::detectCores()); \
-    install.packages(c('Rcpp', 'nloptr', 'doParallel', 'foreach'), \
+    install.packages(c('Rcpp', 'nloptr', 'doFuture', 'foreach'), \
     repos='https://cloud.r-project.org/')" \
-    && R -e "pkgs <- c('Rcpp', 'nloptr', 'doParallel', 'foreach'); \
+    && R -e "pkgs <- c('Rcpp', 'nloptr', 'doFuture', 'foreach'); \
     inst <- installed.packages()[, 'Package']; \
     if (!all(pkgs %in% inst)) stop(paste('Missing:', pkgs[!pkgs %in% inst]))"

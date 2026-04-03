@@ -1,4 +1,4 @@
-library(doParallel)
+library(doFuture)
 library(foreach)
 library(dplyr)
 library(Rcpp)
@@ -23,29 +23,32 @@ cat(">> Master: Compilation complete.\n")
 lsb_hosts <- Sys.getenv("LSB_HOSTS")
 n_cores <- if (lsb_hosts != "") length(strsplit(lsb_hosts, " ")[[1]]) else (parallel::detectCores() - 1)
 
-cl <- makePSOCKcluster(n_cores)
-registerDoParallel(cl)
+registerDoFuture()
 cat(sprintf(">> Registered %d local sockets.\n", n_cores))
 
-# --- 3. SEQUENTIAL Worker Initialization (The Fix) ---
+# --- 3. Worker Initialization ---
 cat(">> Initializing workers one-by-one to prevent filesystem congestion...\n")
 
-for (i in 1:length(cl)) {
-  clusterEvalQ(cl[i], {
+worker_ids <- 1:n_cores
+
+for (id in worker_ids) {
+  f <- future({
     library(Rcpp)
     library(splines)
     library(nloptr)
     library(dplyr)
-
-    # Load the pre-compiled binary from the cache
+    
     Rcpp::sourceCpp("./mmd_cpp.cpp", cacheDir = "./cpp_cache")
-
+    
     source("./mmd_cpp.R")
     source("./generate_pop.R")
+    
+    return(TRUE)
   })
-
-  if (i %% 10 == 0) cat(sprintf("   [%d/%d] workers ready...\n", i, length(cl)))
-  Sys.sleep(0.1)
+  value(f)
+  
+  if (id %% 10 == 0) cat(sprintf("   [%d/%d] workers ready...\n", id, n_cores))
+  Sys.sleep(0.1) # Breathe
 }
 
 cat(">> All workers initialized successfully. Starting Monte Carlo...\n")
