@@ -31,15 +31,22 @@ cat("All workers ready. Starting Monte Carlo...\n")
 results_list <- foreach(i = 1:mc_reps) %dopar% {
   
   # Generate Data
-  sim <- generate_civil_war_data(
-    J = 500,                  # Increased for eta stability
-    T_full = 100,
+  sim <- gen_pop(
+    J = 500, 
+    T_full = 100, 
     birth_range = c(1, 50),
-    obs_start_range = c(50, 70),
-    beta_0 = 0.2, beta_gdp = -0.10, beta_democ = -0.05, 
-    beta_eth = 0.02, beta_pop = 0.05, beta_ref = 0.05,
-    gamma_v = -0.02,          # Corrected name from beta_v
-    seed = 12345 + i          # Unique seed per rep
+    obs_start_range = c(50, 90),
+    beta_0 = 0.2, 
+    beta_gdp = -0.10, 
+    beta_democ = -0.05, 
+    beta_eth = 0.02,
+    beta_pop = 0.05,
+    beta_ref = 0.05,
+    beta_v = -0.02, 
+    mean_gdp = 8.5,
+    mean_pop = 16.0,
+    gdp_shock = 0.05,
+    seed = 72938
   )
   pop <- sim$data
   true_params <- sim$true_params
