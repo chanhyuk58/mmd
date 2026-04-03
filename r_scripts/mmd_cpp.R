@@ -1,6 +1,7 @@
 library(Rcpp)
 library(nloptr)     
 library(splines)
+library(stats)
 # library(np)         
   
 
