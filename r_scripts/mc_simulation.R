@@ -2,7 +2,7 @@ library(doParallel)
 library(foreach)
 library(dplyr)
 
-cat("packages loaded")
+cat("Packages loaded...\n")
 
 # Set Up
 mc_reps <- 100                 
@@ -19,6 +19,8 @@ results_list <- foreach(i = 1:mc_reps, .packages = c("Rcpp", "np", "nloptr", "st
   source("./generate_pop.R")
   source("./mmd_cpp.R") 
   Rcpp::sourceCpp("./mmd_cpp.cpp")
+
+  cat("Functions loaded...\n")
   
   options(np.cores = 1)
   
@@ -35,6 +37,8 @@ results_list <- foreach(i = 1:mc_reps, .packages = c("Rcpp", "np", "nloptr", "st
   )
   pop <- sim$data
   true_params <- sim$true_params
+
+  cat("Population Generated...\n")
   
   # Projection Method
   fit_proj <- MMD_bounds(
@@ -44,6 +48,8 @@ results_list <- foreach(i = 1:mc_reps, .packages = c("Rcpp", "np", "nloptr", "st
     B = 0,
     verbose = FALSE
   )
+
+  cat("Projection method is done...\n")
   
   # Profile Method
   fit_prof <- MMD_bounds(
@@ -55,6 +61,8 @@ results_list <- foreach(i = 1:mc_reps, .packages = c("Rcpp", "np", "nloptr", "st
     B = 0,
     verbose = FALSE
   )
+
+  cat("Profile method is done...\n")
   
   # Results
   rep_res <- data.frame(
