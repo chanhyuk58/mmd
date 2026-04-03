@@ -54,10 +54,10 @@ for (n in ns) {
     # Estimation
     ## estimation of eta -- Nadaraya–Watson estimator
     ### estimate the bandwidth first
-    bw <- np::npregbw(y ~ v0 + v1 + X1 + X2 + X3 + X4 + X5, data = pop[idx, ], regtype='lc') 
+    bw <- np::npregbw(y ~ v0 + v1 + X1 + X2 + X3 + X4 + X5, data = pop[idx, ], regtype='lc')
 
     ### estimate eta Kernel regression
-    model <- npreg(bws = bw, gradients = TRUE)  
+    model <- npreg(bws = bw, gradients = TRUE)
     eta <- as.matrix(predict(model, newdata=X.eval))
 
     ## Objective function Q = mean(Q0 + Q1) (see Cerquera et al., 2014 page 4)
@@ -79,7 +79,7 @@ for (n in ns) {
 
     ## Optimization
     Q_min <- optim(par=c(0, 0, 0), fn=Q, eta=eta, x=xn, v0=v0n, v1=v1n,
-      # lower=c(-2, 0, -2), upper=c(2, 2, 2), 
+      # lower=c(-2, 0, -2), upper=c(2, 2, 2),
       method='BFGS',
       control=list(maxit=500))
 
@@ -99,15 +99,15 @@ for (n in ns) {
 
     # Get set C which Q(C) =< min(Q)
     cl <- makeCluster(detectCores())
-    clusterExport(cl, varlist=list(candidates, xn, v0n, v1n, c, eta, Q, Q_min, epsilon_N))
+    clusterExport(cl, varlist=list("candidates", "xn", "v0n", "v1n", "eta", "Q", "Q_min", "epsilon_N"))
     C_star <- candidates[
-      parallel::parApply(cl=cl, candidates, 
-        FUN=function(c){(Q(xn, v0n, v1n, c, eta) <= (Q_min$value + epsilon_N))}, 
+      parallel::parApply(cl=cl, candidates,
+        FUN=function(c){(Q(xn, v0n, v1n, c, eta) <= (Q_min$value + epsilon_N))},
         MARGIN=1)
       , ]
     # C_star <- candidates[
-    #   apply(candidates, 
-    #     FUN=function(c){(Q(xn, v0n, v1n, c, eta) <= (Q_min$value + epsilon_N))}, 
+    #   apply(candidates,
+    #     FUN=function(c){(Q(xn, v0n, v1n, c, eta) <= (Q_min$value + epsilon_N))},
     #     MARGIN=1)
     #   , ]
 
@@ -158,7 +158,7 @@ mc_results %>%
 
 
 # # Another Approach -- Find Vertices
-# ## Population 
+# ## Population
 # get_Cstar <- function(candidates, x, v0, v1, eta) {
 #   # Function to check if Q1(c, eta) == 0 and Q0(c, eta) == 0
 #   is_in_Cstar <- function(c) {
@@ -222,10 +222,10 @@ mc_results %>%
 #
 # # Plot points with Var1 as x and Var2 as y
 # par(mfrow=c(1,1))
-# plot(C_star$Var2, C_star$Var3, 
-#      xlab = "V", 
-#      ylab = "X", 
-#      # main = "Plot of Var1 vs Var2", 
+# plot(C_star$Var2, C_star$Var3,
+#      xlab = "V",
+#      ylab = "X",
+#      # main = "Plot of Var1 vs Var2",
 #      pch = 19, # Solid circle for points
 #      col = "blue") # Color of points
 #
@@ -233,10 +233,10 @@ mc_results %>%
 # plt2 <- C_star[C_star$Var3 == unique(C_star$Var3)[2], ]
 #
 # # Plot points with Var1 as x and Var2 as y
-# plot(plt2$Var1, plt2$Var2, 
-#      xlab = "Var1", 
-#      ylab = "Var2", 
-#      main = "Plot of Var1 vs Var2", 
+# plot(plt2$Var1, plt2$Var2,
+#      xlab = "Var1",
+#      ylab = "Var2",
+#      main = "Plot of Var1 vs Var2",
 #      pch = 19, # Solid circle for points
 #      col = "blue") # Color of points
 
@@ -258,8 +258,8 @@ for (n in ns) {
     X.eval <- data.table(v0n, v1n, xn)
 
     # Estimation
-    bw <- np::npregbw(yn ~ v0n + v1n + xn, regtype='lc') 
-    model <- npreg(bws = bw, gradients = TRUE)  
+    bw <- np::npregbw(yn ~ v0n + v1n + xn, regtype='lc')
+    model <- npreg(bws = bw, gradients = TRUE)
     eta <- as.matrix(predict(model, newdata=X.eval))
 
     # Objective function
