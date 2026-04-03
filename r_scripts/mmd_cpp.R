@@ -5,11 +5,11 @@ library(stats)
 # library(np)         
   
 
-if(file.exists("mmd_cpp.cpp")) {
-  Rcpp::sourceCpp("mmd_cpp.cpp")
-} else {
-  stop("Error: 'mmd_cpp.cpp' not found.")
-}
+# if(file.exists("mmd_cpp.cpp")) {
+#   Rcpp::sourceCpp("mmd_cpp.cpp")
+# } else {
+#   stop("Error: 'mmd_cpp.cpp' not found.")
+# }
 
 MMD_bounds <- function(formula, data, v0_col, v1_col,
                        method = c("projection", "profile"),

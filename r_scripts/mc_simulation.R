@@ -1,36 +1,54 @@
 library(doParallel)
 library(foreach)
+library(Rcpp)
 library(dplyr)
+library(tidyr)
 
-cat("Packages loaded...\n")
-  
-# Set Up
-mc_reps <- 100                 
-n_cores <- detectCores() - 1  
-cl <- makeCluster(n_cores)
+# Parse IBM LSF Environment
+lsb_hosts <- Sys.getenv("LSB_HOSTS")
+
+if (lsb_hosts != "") {
+  node_list <- strsplit(lsb_hosts, " ")[[1]]
+  cl <- makePSOCKcluster(node_list)
+  cat(sprintf(">> HPC Mode: Registered %d slots on LSF.\n", length(node_list)))
+} else {
+  # Local Fallback
+  n_cores <- parallel::detectCores() - 1
+  cl <- makeCluster(n_cores)
+  cat(sprintf(">> Local Mode: Registered %d cores.\n", n_cores))
+}
+
 registerDoParallel(cl)
 
-cat(sprintf("Starting MC simulation with %d reps on %d cores...\n", mc_reps, n_cores))
+# Pre-Compile C++
+cat(">> Compiling C++ backend on master node...\n")
+cache_path <- paste0(getwd(), "/cpp_cache")
+if(!dir.exists(cache_path)) dir.create(cache_path)
+Rcpp::sourceCpp("./mmd_cpp.cpp", cacheDir = cache_path)
 
-cat(sprintf("Initializing %d workers sequentially to avoid C++ race condition...\n", n_cores))
-for (i in 1:length(cl)) {
-  clusterEvalQ(cl[i], {
-    library(Rcpp)
-    library(splines)
-    library(nloptr)
-    library(dplyr)
-    
-    source("./mmd_cpp.R")
-    source("./generate_pop.R")
-  })
-  if(i %% 5 == 0) cat(sprintf("  Workers 1 to %d initialized...\n", i))
-}
-cat("All workers ready. Starting Monte Carlo...\n")
-
-# Monte Carlo Simulation
-results_list <- foreach(i = 1:mc_reps) %dopar% {
+# Initialize Distributed Workers
+cat(">> Initializing remote workers...\n")
+clusterEvalQ(cl, {
+  library(Rcpp)
+  library(splines)
+  library(nloptr)
+  library(dplyr)
   
-  # Generate Data
+  # Load pre-compiled binary
+  Rcpp::sourceCpp("./mmd_cpp.cpp", cacheDir = paste0(getwd(), "/cpp_cache"))
+  
+  # Source logic
+  source("./mmd_cpp.R")
+  source("./generate_pop.R")
+})
+
+# Parallel Monte Carlo Loop
+mc_reps <- 100  # Total iterations
+cat(sprintf(">> Starting MC loop (%d iterations)...\n", mc_reps))
+
+results_list <- foreach(i = 1:mc_reps, .errorhandling = 'pass') %dopar% {
+  
+  # A. Generate Data
   sim <- gen_pop(
     J = 500, 
     T_full = 100, 
@@ -50,73 +68,68 @@ results_list <- foreach(i = 1:mc_reps) %dopar% {
   )
   pop <- sim$data
   true_params <- sim$true_params
-
-  cat("Population Generated...\n")
   
-  # Projection Method
+  # B. Estimate via Projection Method
   fit_proj <- MMD_bounds(
     onset ~ log_gdp + democ + eth_het + log_pop + log_ref, 
     data = pop, v0_col = "v0", v1_col = "v1",
-    method = "projection",
-    B = 0,
-    verbose = FALSE
+    method = "projection", B = 0, verbose = FALSE
   )
-
-  cat("Projection method is done...\n")
   
-  # Profile Method
+  # C. Estimate via Profile Grid Method
   fit_prof <- MMD_bounds(
     onset ~ log_gdp + democ + eth_het + log_pop + log_ref, 
     data = pop, v0_col = "v0", v1_col = "v1",
-    method = "profile",
-    grid_radius = 0.5,
-    grid_points = 100, 
-    B = 0,
-    verbose = FALSE
-  )
-
-  cat("Profile method is done...\n")
-  
-  # Results
-  rep_res <- data.frame(
-    iteration = i,
-    param     = names(true_params),
-    truth     = as.numeric(true_params),
-    # Projection Results
-    proj_est  = fit_proj$point_est,
-    proj_low  = fit_proj$bounds_ID$Lower,
-    proj_upp  = fit_proj$bounds_ID$Upper,
-    # Profile Results
-    prof_low  = fit_prof$bounds_ID$Lower,
-    prof_upp  = fit_prof$bounds_ID$Upper
+    method = "profile", 
+    grid_radius = 0.5, 
+    grid_points = 100,
+    B = 0, verbose = FALSE
   )
   
-  # Coverage
-  rep_res <- rep_res %>%
+  # D. Combine Results for this iteration
+  res_proj <- fit_proj$bounds_ID %>% 
+    mutate(param = rownames(.), method = "projection")
+  
+  res_prof <- fit_prof$bounds_ID %>% 
+    mutate(param = rownames(.), method = "profile")
+  
+  combined <- bind_rows(res_proj, res_prof) %>%
     mutate(
-      proj_covered = (truth >= proj_low & truth <= proj_upp),
-      prof_covered = (truth >= prof_low & truth <= prof_upp),
-      proj_width   = proj_upp - proj_low
+      rep = i,
+      truth = true_params[param],
+      covered = (truth >= Lower & truth <= Upper),
+      width = Upper - Lower
     )
   
-  return(rep_res)
+  return(combined)
 }
 
 stopCluster(cl)
 
-# MC results
-all_results <- bind_rows(results_list)
+# --- 5. Final Aggregation and Summary ---
+cat(">> Aggregating results...\n")
+all_reps_df <- bind_rows(results_list)
 
-summary_stats <- all_results %>%
-  group_by(param) %>%
+# Calculate Summary Statistics
+summary_table <- all_reps_df %>%
+  group_by(param, method) %>%
   summarize(
-    True_Value    = first(truth),
-    Avg_Proj_Est  = mean(proj_est),
-    ID_Coverage   = mean(proj_covered),
-    Mean_Width    = mean(proj_width),
-    Method_Match  = mean(abs(proj_low - prof_low) < 0.01) # Do methods agree?
-  )
+    True_Value   = first(truth),
+    Mean_Lower   = mean(Lower, na.rm = TRUE),
+    Mean_Upper   = mean(Upper, na.rm = TRUE),
+    Mean_Width   = mean(width, na.rm = TRUE),
+    ID_Coverage  = mean(covered, na.rm = TRUE),
+    Fail_Rate    = mean(is.na(Lower)),
+    .groups = "drop"
+  ) %>%
+  arrange(param, method)
 
-print(summary_stats)
+# Print Summary to Console
+print(as.data.frame(summary_table))
 
-save(all_results, summary_stats, file = paste0("mc_final_", Sys.Date(), ".rda"))
+# Save everything
+saveRDS(all_reps_df, file = "mc_full_data.rds")
+saveRDS(summary_table, file = "mc_summary_table.rds")
+write.csv(summary_table, "mmd_comparison_results.csv", row.names = FALSE)
+
+cat(">> Simulation Complete. Files saved to disk.\n")
