@@ -1,31 +1,32 @@
 library(doParallel)
 library(foreach)
 library(dplyr)
+library(Rcpp)
+library(splines)
+library(nloptr)
 
-cat("Packages loaded...\n")
+cat("Packages loaded ...\n")
   
 # Set Up
 mc_reps <- 100                 
-n_cores <- detectCores() - 1  
-cl <- makeCluster(n_cores)
-registerDoParallel(cl)
-
-cat(sprintf("Starting MC simulation with %d reps on %d cores...\n", mc_reps, n_cores))
-
-cat(sprintf("Initializing %d workers sequentially to avoid C++ race condition...\n", n_cores))
-for (i in 1:length(cl)) {
-  clusterEvalQ(cl[i], {
-    library(Rcpp)
-    library(splines)
-    library(nloptr)
-    library(dplyr)
-    
-    source("./mmd_cpp.R")
-    source("./generate_pop.R")
-  })
-  if(i %% 5 == 0) cat(sprintf("  Workers 1 to %d initialized...\n", i))
+lsb_hosts <- Sys.getenv("LSB_HOSTS")
+if (lsb_hosts != "") {
+  node_list <- strsplit(lsb_hosts, " ")[[1]]
+  # Use Forking: No SSH, no blaunch, no port 22 needed!
+  cl <- makeForkCluster(length(node_list))
+  cat(sprintf(">> HPC Mode: Using Forking on %d cores.\n", length(node_list)))
+} else {
+  cl <- makeCluster(parallel::detectCores() - 1)
 }
-cat("All workers ready. Starting Monte Carlo...\n")
+
+registerDoParallel(cl)
+cat("Parallel computing is ready ...\n")
+
+Rcpp::sourceCpp("./mmd_cpp.cpp")
+source("./mmd_cpp.R")
+source("./generate_pop.R")     
+
+cat("Packages are loaded ...\n")
 
 # Monte Carlo Simulation
 results_list <- foreach(i = 1:mc_reps) %dopar% {
