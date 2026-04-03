@@ -14,7 +14,7 @@ if (lsb_hosts != "") {
 } else {
   # Local Fallback
   n_cores <- parallel::detectCores() - 1
-  cl <- makeCluster(n_cores)
+  cl <- makePSOCKcluster(node_list, rshcmd = "blaunch")
   cat(sprintf(">> Local Mode: Registered %d cores.\n", n_cores))
 }
 
