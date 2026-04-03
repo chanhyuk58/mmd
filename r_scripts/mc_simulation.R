@@ -9,10 +9,10 @@ cat("Packages loaded ...\n")
   
 # Set Up
 mc_reps <- 100                 
+
 lsb_hosts <- Sys.getenv("LSB_HOSTS")
 if (lsb_hosts != "") {
   node_list <- strsplit(lsb_hosts, " ")[[1]]
-  # Use Forking: No SSH, no blaunch, no port 22 needed!
   cl <- makeForkCluster(length(node_list))
   cat(sprintf(">> HPC Mode: Using Forking on %d cores.\n", length(node_list)))
 } else {
@@ -22,11 +22,10 @@ if (lsb_hosts != "") {
 registerDoParallel(cl)
 cat("Parallel computing is ready ...\n")
 
-Rcpp::sourceCpp("./mmd_cpp.cpp")
 source("./mmd_cpp.R")
 source("./generate_pop.R")     
 
-cat("Packages are loaded ...\n")
+cat("Functions are loaded ...\n")
 
 # Monte Carlo Simulation
 results_list <- foreach(i = 1:mc_reps) %dopar% {
@@ -52,7 +51,7 @@ results_list <- foreach(i = 1:mc_reps) %dopar% {
   pop <- sim$data
   true_params <- sim$true_params
 
-  cat("Population Generated...\n")
+  cat("Population Generated ...\n")
   
   # Projection Method
   fit_proj <- MMD_bounds(
@@ -63,7 +62,7 @@ results_list <- foreach(i = 1:mc_reps) %dopar% {
     verbose = FALSE
   )
 
-  cat("Projection method is done...\n")
+  cat("Projection method is done ...\n")
   
   # Profile Method
   fit_prof <- MMD_bounds(
@@ -76,7 +75,7 @@ results_list <- foreach(i = 1:mc_reps) %dopar% {
     verbose = FALSE
   )
 
-  cat("Profile method is done...\n")
+  cat("Profile method is done ...\n")
   
   # Results
   rep_res <- data.frame(
@@ -115,7 +114,7 @@ summary_stats <- all_results %>%
     Avg_Proj_Est  = mean(proj_est),
     ID_Coverage   = mean(proj_covered),
     Mean_Width    = mean(proj_width),
-    Method_Match  = mean(abs(proj_low - prof_low) < 0.01) # Do methods agree?
+    Method_Match  = mean(abs(proj_low - prof_low) < 0.01)
   )
 
 print(summary_stats)
