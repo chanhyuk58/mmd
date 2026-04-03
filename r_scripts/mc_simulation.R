@@ -2,6 +2,8 @@ library(doParallel)
 library(foreach)
 library(dplyr)
 
+cat("packages loaded")
+
 # Set Up
 mc_reps <- 100                 
 n_cores <- detectCores() - 1  
