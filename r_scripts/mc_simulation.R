@@ -72,7 +72,7 @@ results_list <- foreach(i = 1:mc_reps, .errorhandling = "stop") %dopar% {
     mean_gdp = 8.5,
     mean_pop = 16.0,
     gdp_shock = 0.05,
-    seed = 72938
+    seed = 72938 + i
   )
   pop <- sim$data
   true_params <- sim$true_params
