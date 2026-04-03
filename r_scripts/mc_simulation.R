@@ -3,7 +3,7 @@ library(foreach)
 library(dplyr)
 
 cat("Packages loaded...\n")
-
+  
 # Set Up
 mc_reps <- 100                 
 n_cores <- detectCores() - 1  
@@ -12,17 +12,23 @@ registerDoParallel(cl)
 
 cat(sprintf("Starting MC simulation with %d reps on %d cores...\n", mc_reps, n_cores))
 
-# Monte Carlo Simulation
-results_list <- foreach(i = 1:mc_reps, .packages = c("Rcpp", "np", "nloptr", "stats", "dplyr"), 
-                        .export = c("MMD_bounds", "generate_civil_war_data")) %dopar% {
-  
-  source("./generate_pop.R")
-  source("./mmd_cpp.R") 
-  Rcpp::sourceCpp("./mmd_cpp.cpp")
+cat(sprintf("Initializing %d workers sequentially to avoid C++ race condition...\n", n_cores))
+for (i in 1:length(cl)) {
+  clusterEvalQ(cl[i], {
+    library(Rcpp)
+    library(splines)
+    library(nloptr)
+    library(dplyr)
+    
+    source("./mmd_cpp.R")
+    source("./generate_pop.R")
+  })
+  if(i %% 5 == 0) cat(sprintf("  Workers 1 to %d initialized...\n", i))
+}
+cat("All workers ready. Starting Monte Carlo...\n")
 
-  cat("Functions loaded...\n")
-  
-  options(np.cores = 1)
+# Monte Carlo Simulation
+results_list <- foreach(i = 1:mc_reps) %dopar% {
   
   # Generate Data
   sim <- generate_civil_war_data(
