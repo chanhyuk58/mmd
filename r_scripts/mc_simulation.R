@@ -10,29 +10,52 @@ cat("Packages loaded ...\n")
 # Set Up
 mc_reps <- 100                 
 
+# --- 1. Master Compilation ---
+cache_path <- "./cpp_cache"
+if(dir.exists(cache_path)) unlink(cache_path, recursive = TRUE)
+dir.create(cache_path)
+
+cat(">> Master: Compiling C++ backend...\n")
+Rcpp::sourceCpp("./mmd_cpp.cpp", cacheDir = cache_path)
+cat(">> Master: Compilation complete.\n")
+
+# --- 2. Setup Cluster ---
 lsb_hosts <- Sys.getenv("LSB_HOSTS")
-if (lsb_hosts != "") {
-  node_list <- strsplit(lsb_hosts, " ")[[1]]
-  cl <- makeForkCluster(length(node_list))
-  cat(sprintf(">> HPC Mode: Using Forking on %d cores.\n", length(node_list)))
-} else {
-  cl <- makeCluster(parallel::detectCores() - 1)
+n_cores <- if (lsb_hosts != "") length(strsplit(lsb_hosts, " ")[[1]]) else (parallel::detectCores() - 1)
+
+cl <- makePSOCKcluster(n_cores)
+registerDoParallel(cl)
+cat(sprintf(">> Registered %d local sockets.\n", n_cores))
+
+# --- 3. SEQUENTIAL Worker Initialization (The Fix) ---
+cat(">> Initializing workers one-by-one to prevent filesystem congestion...\n")
+
+for (i in 1:length(cl)) {
+  clusterEvalQ(cl[i], {
+    library(Rcpp)
+    library(splines)
+    library(nloptr)
+    library(dplyr)
+
+    # Load the pre-compiled binary from the cache
+    Rcpp::sourceCpp("./mmd_cpp.cpp", cacheDir = "./cpp_cache")
+
+    source("./mmd_cpp.R")
+    source("./generate_pop.R")
+  })
+
+  if (i %% 10 == 0) cat(sprintf("   [%d/%d] workers ready...\n", i, length(cl)))
+  Sys.sleep(0.1)
 }
 
-registerDoParallel(cl)
-cat("Parallel computing is ready ...\n")
-
-source("./mmd_cpp.R")
-source("./generate_pop.R")     
-
-cat("Functions are loaded ...\n")
+cat(">> All workers initialized successfully. Starting Monte Carlo...\n")
 
 # Monte Carlo Simulation
-results_list <- foreach(i = 1:mc_reps) %dopar% {
+results_list <- foreach(i = 1:mc_reps, .errorhandling = "stop") %dopar% {
   
   # Generate Data
   sim <- gen_pop(
-    J = 500, 
+    J = 100, 
     T_full = 100, 
     birth_range = c(1, 50),
     obs_start_range = c(50, 90),
