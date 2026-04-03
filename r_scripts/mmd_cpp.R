@@ -1,7 +1,8 @@
 library(Rcpp)
-library(np)         
 library(nloptr)     
-library(stats)
+library(splines)
+# library(np)         
+  
 
 if(file.exists("mmd_cpp.cpp")) {
   Rcpp::sourceCpp("mmd_cpp.cpp")
@@ -10,7 +11,7 @@ if(file.exists("mmd_cpp.cpp")) {
 }
 
 MMD_bounds <- function(formula, data, v0_col, v1_col,
-                       method = c("projection", "grid"),
+                       method = c("projection", "profile"),
                        grid_radius = 0.5,    # Radius in standardized space
                        grid_points = 100,    
                        alpha = 0.05,
@@ -64,32 +65,29 @@ MMD_bounds <- function(formula, data, v0_col, v1_col,
   scale_vec <- c(1.0, sd_v, sd_x)
   
   # --- 2. Nuisance Parameter (eta) via cross-fitting ---
-  if(verbose) cat(sprintf(">> [2/5] Estimating eta via %d-Fold Cross-Fitting...\n", K_folds))
+  if(verbose) cat(sprintf(">> [2/5] Estimating eta via %d-Fold Cross-Fitting (Series)...\n", K_folds))
+  
   df_np <- data.frame(yn = y, v0 = v0_std, v1 = v1_std)
   if (d > 0) df_np <- cbind(df_np, as.data.frame(x_mat_std))
-  fml_np <- as.formula(paste("yn ~", paste(names(df_np)[-1], collapse = " + ")))
+  
+  vars <- names(df_np)[-1]
+  spline_formula_parts <- paste0("bs(", vars, ", df=5)")
+  fml_series <- as.formula(paste("yn ~", paste(spline_formula_parts, collapse = " + ")))
   
   folds <- sample(rep(1:K_folds, length.out = n))
   eta <- numeric(n)
-  
-  if (!strict_bw) {
-    if(verbose) cat("       (Using full-sample bandwidth for speed)\n")
-    bw_obj <- np::npregbw(fml_np, data = df_np, regtype = "lc", bwmethod = "cv.aic") 
-    raw_bws <- bw_obj$bw 
-  }
   
   for(k in 1:K_folds) {
     train_df <- df_np[folds != k, , drop = FALSE]
     test_df  <- df_np[folds == k, , drop = FALSE]
     
-    if (strict_bw) {
-      bw_k <- np::npregbw(fml_np, data = train_df, regtype = "lc", bwmethod = "cv.aic")
-      mod_k <- np::npreg(bws = bw_k$bw, txdat = train_df[,-1, drop=FALSE], tydat = train_df[,1])
-    } else {
-      mod_k <- np::npreg(bws = raw_bws, txdat = train_df[,-1, drop=FALSE], tydat = train_df[,1])
-    }
-    eta[folds == k] <- as.numeric(predict(mod_k, newdata = test_df[,-1, drop=FALSE]))
+    mod_k <- lm(fml_series, data = train_df)
+    
+    eta[folds == k] <- as.numeric(predict(mod_k, newdata = test_df))
   }
+  
+  # Ensure eta is within reasonable bounds for the model
+  eta <- pmin(pmax(eta, min(y)), max(y))
   
   # --- 3. Sample Minimum (Multi-Start BOBYQA) ---
   if(verbose) cat(sprintf(">> [3/5] Finding global sample minimum (%d starts)...\n", n_starts))

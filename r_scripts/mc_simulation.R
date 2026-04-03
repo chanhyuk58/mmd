@@ -1,72 +1,99 @@
-library("txtplot")
-library(parallel)
-options(np.cores = detectCores() - 1)
+library(doParallel)
+library(foreach)
+library(dplyr)
 
-source("./generate_pop.R")
-source("./mmd_cpp.R")
+# Set Up
+mc_reps <- 100                 
+n_cores <- detectCores() - 1  
+cl <- makeCluster(n_cores)
+registerDoParallel(cl)
 
-# The bounds is still very large. 
+cat(sprintf("Starting MC simulation with %d reps on %d cores...\n", mc_reps, n_cores))
 
-mc <- 1
-
-for (i in 1:mc) {
-  # Create a population
-    pop <- gen_pop(
-                   J = 100, # Count of countries
-                   T_full = 100, # Max true duration / history
-                   birth_range = c(1, 50),
-                   obs_start_range = c(50, 60),
-                   beta_0 = 0.2, 
-                   beta_gdp = -0.10, 
-                   beta_democ = -0.05, 
-                   beta_eth = 0.02,
-                   beta_pop = 0.05,
-                   beta_ref = 0.05,
-                   beta_v = -0.02, 
-                   mean_gdp = 8.5,
-                   mean_pop = 16.0,
-                   gdp_shock = 0.05,
-                   )$data
-  # head(pop)
-  cat("Head of population:\n")
-  print(head(pop))
-  cat("Number of Total Civil War Onset:\n")
-  print(sum(pop$onset))
-  cat("Proportion of Total Civil War Onset:\n")
-  print(mean(pop$onset))
-  cat("Summary of the length of V and the Density plot:\n")
-  print(summary(pop$v1 - pop$v0))
-  txtdensity((pop$v1 - pop$v0))
-
-  # Estimate bounds
-  bounds_projection <- MMD_bounds(
+# Monte Carlo Simulation
+results_list <- foreach(i = 1:mc_reps, .packages = c("Rcpp", "np", "nloptr", "stats", "dplyr"), 
+                        .export = c("MMD_bounds", "generate_civil_war_data")) %dopar% {
+  
+  source("./generate_pop.R")
+  source("./mmd_cpp.R") 
+  Rcpp::sourceCpp("./mmd_cpp.cpp")
+  
+  options(np.cores = 1)
+  
+  # Generate Data
+  sim <- generate_civil_war_data(
+    J = 500,                  # Increased for eta stability
+    T_full = 100,
+    birth_range = c(1, 50),
+    obs_start_range = c(50, 70),
+    beta_0 = 0.2, beta_gdp = -0.10, beta_democ = -0.05, 
+    beta_eth = 0.02, beta_pop = 0.05, beta_ref = 0.05,
+    gamma_v = -0.02,          # Corrected name from beta_v
+    seed = 12345 + i          # Unique seed per rep
+  )
+  pop <- sim$data
+  true_params <- sim$true_params
+  
+  # Projection Method
+  fit_proj <- MMD_bounds(
     onset ~ log_gdp + democ + eth_het + log_pop + log_ref, 
     data = pop, v0_col = "v0", v1_col = "v1",
     method = "projection",
-    # grid_list = grid_list,
-    alpha = 0.05,            # Critical value
-    B = 0,                 # Bootstrap reps for CI calculation
-    # b_exponent = 0.8,        # Proportion of sample used for bootstrap CI
-    verbose = TRUE
+    B = 0,
+    verbose = FALSE
   )
-  bounds_grid <- MMD_bounds(
+  
+  # Profile Method
+  fit_prof <- MMD_bounds(
     onset ~ log_gdp + democ + eth_het + log_pop + log_ref, 
     data = pop, v0_col = "v0", v1_col = "v1",
-    method = "grid",
-    grid_radius = 1.0,      # This is more than enough for LPM model, since beta =< 1
-    grid_points = 10000,    # Eval Points for each Parameters
-    alpha = 0.05,            # Critical value
-    B = 0,                 # Bootstrap reps for CI calculation
-    # b_exponent = 0.8,        # Proportion of sample used for bootstrap CI
-    verbose = TRUE
+    method = "profile",
+    grid_radius = 0.5,
+    grid_points = 100, 
+    B = 0,
+    verbose = FALSE
   )
-  cat("Summary of Bounds from Pojection Method:\n")
-  print(bounds_projection)
-  cat("Summary of Bounds from Grid-search Method:\n")
-  print(bounds_grid)
-  save(bounds_projection, file = paste("./projection", "_", Sys.Date(), ".rda"))
-  save(bounds_grid, file = paste("./grid", "_", Sys.Date(), ".rda"))
+  
+  # Results
+  rep_res <- data.frame(
+    iteration = i,
+    param     = names(true_params),
+    truth     = as.numeric(true_params),
+    # Projection Results
+    proj_est  = fit_proj$point_est,
+    proj_low  = fit_proj$bounds_ID$Lower,
+    proj_upp  = fit_proj$bounds_ID$Upper,
+    # Profile Results
+    prof_low  = fit_prof$bounds_ID$Lower,
+    prof_upp  = fit_prof$bounds_ID$Upper
+  )
+  
+  # Coverage
+  rep_res <- rep_res %>%
+    mutate(
+      proj_covered = (truth >= proj_low & truth <= proj_upp),
+      prof_covered = (truth >= prof_low & truth <= prof_upp),
+      proj_width   = proj_upp - proj_low
+    )
+  
+  return(rep_res)
 }
 
-proc.time()
-gc()
+stopCluster(cl)
+
+# MC results
+all_results <- bind_rows(results_list)
+
+summary_stats <- all_results %>%
+  group_by(param) %>%
+  summarize(
+    True_Value    = first(truth),
+    Avg_Proj_Est  = mean(proj_est),
+    ID_Coverage   = mean(proj_covered),
+    Mean_Width    = mean(proj_width),
+    Method_Match  = mean(abs(proj_low - prof_low) < 0.01) # Do methods agree?
+  )
+
+print(summary_stats)
+
+save(all_results, summary_stats, file = paste0("mc_final_", Sys.Date(), ".rda"))
