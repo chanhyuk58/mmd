@@ -135,9 +135,14 @@ summary_stats <- all_results %>%
   summarize(
     True_Value    = first(truth),
     Avg_Proj_Est  = mean(proj_est),
-    ID_Coverage   = mean(proj_covered),
-    Mean_Width    = mean(proj_width),
-    Method_Match  = mean(abs(proj_low - prof_low) < 0.01)
+    Avg_Proj_Low  = mean(proj_low),
+    Avg_Proj_Upp  = mean(proj_upp),
+    Proj_Coverage   = mean(proj_covered),
+    Avg_Prof_Est  = mean(prof_est),
+    Avg_Prof_Low  = mean(prof_low),
+    Avg_Prof_Upp  = mean(prof_upp),
+    Prof_Coverage   = mean(prof_covered),
+    n = n()
   )
 
 print(summary_stats)
