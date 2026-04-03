@@ -8,6 +8,6 @@ RUN apt-get update && apt-get install -y \
 
 RUN R -e "install.packages( \
     c('Rcpp', 'splines', 'nloptr', 'doParallel', 'foreach'), repos='https://cloud.r-project.org/')" \
-    && R -e "if (!all(c('Rcpp', 'np', 'nloptr', 'txtplot') %in% installed.packages())) \
+    && R -e "if (!all(c('Rcpp', 'splines', 'nloptr', 'doParallel', 'foreach') %in% installed.packages())) \
     stop('Package installation failed!')"
 
