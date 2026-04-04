@@ -54,7 +54,7 @@ for (id in worker_ids) {
 cat(">> All workers initialized successfully. Starting Monte Carlo...\n")
 
 # Monte Carlo Simulation
-results_list <- foreach(i = 1:mc_reps, .errorhandling = "stop") %dopar% {
+results_list <- foreach(i = 1:mc_reps, .errorhandling = "stop") %dofuture% {
   
   # Generate Data
   sim <- gen_pop(
