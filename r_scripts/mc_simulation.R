@@ -54,6 +54,7 @@ for (id in worker_ids) {
 cat(">> All workers initialized successfully. Starting Monte Carlo...\n")
 
 # Monte Carlo Simulation
+set.seed(4875995)
 results_list <- foreach(i = 1:mc_reps, .errorhandling = "stop") %dofuture% {
   
   # Generate Data
@@ -71,8 +72,7 @@ results_list <- foreach(i = 1:mc_reps, .errorhandling = "stop") %dofuture% {
     beta_v = -0.02, 
     mean_gdp = 8.5,
     mean_pop = 16.0,
-    gdp_shock = 0.05,
-    seed = 72938 + i
+    gdp_shock = 0.05
   )
   pop <- sim$data
   true_params <- sim$true_params
@@ -127,8 +127,6 @@ results_list <- foreach(i = 1:mc_reps, .errorhandling = "stop") %dofuture% {
   
   return(rep_res)
 }
-
-stopCluster(cl)
 
 # MC results
 all_results <- bind_rows(results_list)

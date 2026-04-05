@@ -15,11 +15,8 @@ gen_pop <- function(
   beta_v = -0.02,
   mean_gdp = 8.5,
   mean_pop = 16.0,
-  gdp_shock = 0.05,
-  seed = 72938
+  gdp_shock = 0.05
 ) {
-
-  set.seed(seed)
 
   # 1. Meta-Data & Fixed Effects
   country_meta <- data.frame(country = 1:J) %>%
