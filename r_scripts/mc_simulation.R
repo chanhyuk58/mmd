@@ -8,7 +8,7 @@ library(nloptr)
 cat("Packages loaded ...\n")
   
 # Set Up
-mc_reps <- 100                 
+mc_reps <- 100
 
 # --- 1. Master Compilation ---
 cache_path <- "./cpp_cache"
@@ -139,7 +139,6 @@ summary_stats <- all_results %>%
     Avg_Proj_Low  = mean(proj_low),
     Avg_Proj_Upp  = mean(proj_upp),
     Proj_Coverage   = mean(proj_covered),
-    Avg_Prof_Est  = mean(prof_est),
     Avg_Prof_Low  = mean(prof_low),
     Avg_Prof_Upp  = mean(prof_upp),
     Prof_Coverage   = mean(prof_covered),
