@@ -142,7 +142,7 @@ summary_stats <- all_results %>%
     Avg_Prof_Low  = mean(prof_low),
     Avg_Prof_Upp  = mean(prof_upp),
     Prof_Coverage   = mean(prof_covered),
-    n = n()
+    mc_reps = n()
   )
 
 print(summary_stats)
