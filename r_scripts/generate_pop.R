@@ -135,7 +135,7 @@ gen_pop <- function(
 
   true_params <- c(
     "(Intercept)" = beta_0,
-    "latent_v" = beta_v,
+    "latent_v0" = beta_v,
     "log_gdp" = beta_gdp,
     "democ" = beta_democ,
     "eth_het" = beta_eth,
