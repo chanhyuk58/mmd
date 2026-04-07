@@ -70,25 +70,27 @@ MMD_bounds <- function(formula, data, v0_col, v1_col,
   
   df_np <- data.frame(yn = y, v0 = v0_std, v1 = v1_std)
   if (d > 0) df_np <- cbind(df_np, as.data.frame(x_mat_std))
-  
-  vars <- names(df_np)[-1]
-  spline_formula_parts <- paste0("bs(", vars, ", df=5)")
-  fml_series <- as.formula(paste("yn ~", paste(spline_formula_parts, collapse = " + ")))
-  
-  folds <- sample(rep(1:K_folds, length.out = n))
-  eta <- numeric(n)
-  
-  for(k in 1:K_folds) {
-    train_df <- df_np[folds != k, , drop = FALSE]
-    test_df  <- df_np[folds == k, , drop = FALSE]
+    fml_np <- as.formula(paste("yn ~", paste(names(df_np)[-1], collapse = " + ")))
     
-    mod_k <- lm(fml_series, data = train_df)
+    bw_obj <- np::npregbw(fml_np, data = df_np, regtype = "lc", bwmethod = "cv.aic") 
+    raw_bws <- bw_obj$bw 
     
-    eta[folds == k] <- as.numeric(predict(mod_k, newdata = test_df))
-  }
-  
-  # Ensure eta is within reasonable bounds for the model
-  eta <- pmin(pmax(eta, min(y)), max(y))
+    folds <- sample(rep(1:K_folds, length.out = n))
+    eta <- numeric(n)
+    
+    for(k in 1:K_folds) {
+        train_df <- df_np[folds != k, , drop = FALSE]
+        test_df  <- df_np[folds == k, , drop = FALSE]
+            
+        mod_k <- np::npreg(bws = raw_bws, 
+                              txdat = train_df[, -1, drop = FALSE], 
+                              tydat = train_df[, 1],
+                              ckertype = "epa")
+            
+        eta[folds == k] <- as.numeric(predict(mod_k, newdata = test_df[, -1, drop = FALSE]))
+    }
+      
+    eta <- pmin(pmax(eta, min(y)), max(y))
   
   # --- 3. Sample Minimum (Multi-Start BOBYQA) ---
   if(verbose) cat(sprintf(">> [3/5] Finding global sample minimum (%d starts)...\n", n_starts))

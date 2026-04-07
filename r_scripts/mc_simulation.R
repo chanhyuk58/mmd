@@ -1,4 +1,4 @@
-library(doParallel)
+library(doFuture)
 library(foreach)
 library(dplyr)
 library(Rcpp)
@@ -8,36 +8,69 @@ library(nloptr)
 cat("Packages loaded ...\n")
   
 # Set Up
-mc_reps <- 100                 
+mc_reps <- 100
 
+# --- 1. Master Compilation ---
+cache_path <- "./cpp_cache"
+if(dir.exists(cache_path)) unlink(cache_path, recursive = TRUE)
+dir.create(cache_path)
+
+cat(">> Master: Compiling C++ backend...\n")
+Rcpp::sourceCpp("./mmd_cpp.cpp", cacheDir = cache_path)
+cat(">> Master: Compilation complete.\n")
+
+# --- 2. Setup Cluster ---
 lsb_hosts <- Sys.getenv("LSB_HOSTS")
-if (lsb_hosts != "") {
-  node_list <- strsplit(lsb_hosts, " ")[[1]]
-  cl <- makeForkCluster(length(node_list))
-  cat(sprintf(">> HPC Mode: Using Forking on %d cores.\n", length(node_list)))
-} else {
-  cl <- makeCluster(parallel::detectCores() - 1)
+n_cores <- if (lsb_hosts != "") length(strsplit(lsb_hosts, " ")[[1]]) else (parallel::detectCores() - 1)
+
+registerDoFuture()
+cat(sprintf(">> Registered %d local sockets.\n", n_cores))
+
+# --- 3. Worker Initialization ---
+cat(">> Initializing workers one-by-one to prevent filesystem congestion...\n")
+
+worker_ids <- 1:n_cores
+
+for (id in worker_ids) {
+  f <- future({
+    library(Rcpp)
+    library(splines)
+    library(nloptr)
+    library(dplyr)
+    
+    Rcpp::sourceCpp("./mmd_cpp.cpp", cacheDir = "./cpp_cache")
+    
+    source("./mmd_cpp.R")
+    source("./generate_pop.R")
+    
+    return(TRUE)
+  })
+  value(f)
+  
+  if (id %% 10 == 0) cat(sprintf("   [%d/%d] workers ready...\n", id, n_cores))
+  Sys.sleep(0.1) # Breathe
 }
 
-registerDoParallel(cl)
-cat("Parallel computing is ready ...\n")
-
-source("./mmd_cpp.R")
-source("./generate_pop.R")     
-
-cat("Functions are loaded ...\n")
+cat(">> All workers initialized successfully. Starting Monte Carlo...\n")
 
 # Monte Carlo Simulation
+<<<<<<< HEAD
 results_list <- foreach(i = 1:mc_reps,
                         .packages = c("dplyr", "Rcpp", "splines", "nloptr")) %dopar% {
 
   # Source functions inside each worker (needed for PSOCK clusters)
   source("./mmd_cpp.R")
   source("./generate_pop.R")
+=======
+set.seed(4875995)
+results_list <- foreach(i = 1:mc_reps, 
+                        options.future = list(seed = TRUE), 
+                        .errorhandling = "stop") %dofuture% {
+>>>>>>> 333df1abd1e27962429666cd7469dd6030df68c5
   
   # Generate Data
   sim <- gen_pop(
-    J = 500, 
+    J = 100, 
     T_full = 100, 
     birth_range = c(1, 50),
     obs_start_range = c(50, 90),
@@ -50,8 +83,12 @@ results_list <- foreach(i = 1:mc_reps,
     beta_v = -0.02, 
     mean_gdp = 8.5,
     mean_pop = 16.0,
+<<<<<<< HEAD
     gdp_shock = 0.05,
     seed = 72938 + i
+=======
+    gdp_shock = 0.05
+>>>>>>> 333df1abd1e27962429666cd7469dd6030df68c5
   )
   pop <- sim$data
   true_params <- sim$true_params
@@ -107,8 +144,6 @@ results_list <- foreach(i = 1:mc_reps,
   return(rep_res)
 }
 
-stopCluster(cl)
-
 # MC results
 all_results <- bind_rows(results_list)
 
@@ -117,9 +152,13 @@ summary_stats <- all_results %>%
   summarize(
     True_Value    = first(truth),
     Avg_Proj_Est  = mean(proj_est),
-    ID_Coverage   = mean(proj_covered),
-    Mean_Width    = mean(proj_width),
-    Method_Match  = mean(abs(proj_low - prof_low) < 0.01)
+    Avg_Proj_Low  = mean(proj_low),
+    Avg_Proj_Upp  = mean(proj_upp),
+    Proj_Coverage   = mean(proj_covered),
+    Avg_Prof_Low  = mean(prof_low),
+    Avg_Prof_Upp  = mean(prof_upp),
+    Prof_Coverage   = mean(prof_covered),
+    mc_reps = n()
   )
 
 print(summary_stats)
