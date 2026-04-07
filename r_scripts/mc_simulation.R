@@ -4,6 +4,7 @@ library(dplyr)
 library(Rcpp)
 library(splines)
 library(nloptr)
+library(np)
 
 cat("Packages loaded ...\n")
 
@@ -37,6 +38,7 @@ for (id in worker_ids) {
     library(splines)
     library(nloptr)
     library(dplyr)
+    library(np)
 
     Rcpp::sourceCpp("./mmd_cpp.cpp", cacheDir = "./cpp_cache")
 
