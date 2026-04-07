@@ -55,13 +55,6 @@ cat(">> All workers initialized successfully. Starting Monte Carlo...\n")
 
 # Monte Carlo Simulation
 
-results_list <- foreach(i = 1:mc_reps,
-                        .packages = c("dplyr", "Rcpp", "splines", "nloptr")) %dopar% {
-
-  # Source functions inside each worker (needed for PSOCK clusters)
-  source("./mmd_cpp.R")
-  source("./generate_pop.R")
-=======
 set.seed(4875995)
 results_list <- foreach(i = 1:mc_reps,
                         options.future = list(seed = TRUE),
@@ -84,9 +77,6 @@ results_list <- foreach(i = 1:mc_reps,
     mean_gdp = 8.5,
     mean_pop = 16.0,
 
-    gdp_shock = 0.05,
-    seed = 72938 + i
-=======
     gdp_shock = 0.05
 
   )
