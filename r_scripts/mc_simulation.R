@@ -6,7 +6,7 @@ library(splines)
 library(nloptr)
 
 cat("Packages loaded ...\n")
-  
+
 # Set Up
 mc_reps <- 100
 
@@ -37,16 +37,16 @@ for (id in worker_ids) {
     library(splines)
     library(nloptr)
     library(dplyr)
-    
+
     Rcpp::sourceCpp("./mmd_cpp.cpp", cacheDir = "./cpp_cache")
-    
+
     source("./mmd_cpp.R")
     source("./generate_pop.R")
-    
+
     return(TRUE)
   })
   value(f)
-  
+
   if (id %% 10 == 0) cat(sprintf("   [%d/%d] workers ready...\n", id, n_cores))
   Sys.sleep(0.1) # Breathe
 }
@@ -54,7 +54,7 @@ for (id in worker_ids) {
 cat(">> All workers initialized successfully. Starting Monte Carlo...\n")
 
 # Monte Carlo Simulation
-<<<<<<< HEAD
+
 results_list <- foreach(i = 1:mc_reps,
                         .packages = c("dplyr", "Rcpp", "splines", "nloptr")) %dopar% {
 
@@ -63,41 +63,41 @@ results_list <- foreach(i = 1:mc_reps,
   source("./generate_pop.R")
 =======
 set.seed(4875995)
-results_list <- foreach(i = 1:mc_reps, 
-                        options.future = list(seed = TRUE), 
+results_list <- foreach(i = 1:mc_reps,
+                        options.future = list(seed = TRUE),
                         .errorhandling = "stop") %dofuture% {
->>>>>>> 333df1abd1e27962429666cd7469dd6030df68c5
-  
+
+
   # Generate Data
   sim <- gen_pop(
-    J = 100, 
-    T_full = 100, 
+    J = 100,
+    T_full = 100,
     birth_range = c(1, 50),
     obs_start_range = c(50, 90),
-    beta_0 = 0.2, 
-    beta_gdp = -0.10, 
-    beta_democ = -0.05, 
+    beta_0 = 0.2,
+    beta_gdp = -0.10,
+    beta_democ = -0.05,
     beta_eth = 0.02,
     beta_pop = 0.05,
     beta_ref = 0.05,
-    beta_v = -0.02, 
+    beta_v = -0.02,
     mean_gdp = 8.5,
     mean_pop = 16.0,
-<<<<<<< HEAD
+
     gdp_shock = 0.05,
     seed = 72938 + i
 =======
     gdp_shock = 0.05
->>>>>>> 333df1abd1e27962429666cd7469dd6030df68c5
+
   )
   pop <- sim$data
   true_params <- sim$true_params
 
   cat("Population Generated ...\n")
-  
+
   # Projection Method
   fit_proj <- MMD_bounds(
-    onset ~ log_gdp + democ + eth_het + log_pop + log_ref, 
+    onset ~ log_gdp + democ + eth_het + log_pop + log_ref,
     data = pop, v0_col = "v0", v1_col = "v1",
     method = "projection",
     B = 0,
@@ -105,20 +105,20 @@ results_list <- foreach(i = 1:mc_reps,
   )
 
   cat("Projection method is done ...\n")
-  
+
   # Profile Method
   fit_prof <- MMD_bounds(
-    onset ~ log_gdp + democ + eth_het + log_pop + log_ref, 
+    onset ~ log_gdp + democ + eth_het + log_pop + log_ref,
     data = pop, v0_col = "v0", v1_col = "v1",
     method = "profile",
     grid_radius = 0.5,
-    grid_points = 100, 
+    grid_points = 100,
     B = 0,
     verbose = FALSE
   )
 
   cat("Profile method is done ...\n")
-  
+
   # Results
   rep_res <- data.frame(
     iteration = i,
@@ -132,7 +132,7 @@ results_list <- foreach(i = 1:mc_reps,
     prof_low  = fit_prof$bounds_ID$Lower,
     prof_upp  = fit_prof$bounds_ID$Upper
   )
-  
+
   # Coverage
   rep_res <- rep_res %>%
     mutate(
@@ -140,7 +140,7 @@ results_list <- foreach(i = 1:mc_reps,
       prof_covered = (truth >= prof_low & truth <= prof_upp),
       proj_width   = proj_upp - proj_low
     )
-  
+
   return(rep_res)
 }
 
