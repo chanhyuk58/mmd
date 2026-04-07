@@ -68,29 +68,29 @@ MMD_bounds <- function(formula, data, v0_col, v1_col,
   # --- 2. Nuisance Parameter (eta) via cross-fitting ---
   if(verbose) cat(sprintf(">> [2/5] Estimating eta via %d-Fold Cross-Fitting (Series)...\n", K_folds))
   
-    df_np <- data.frame(yn = y, v0 = v0_std, v1 = v1_std)
-    if (d > 0) df_np <- cbind(df_np, as.data.frame(x_mat_std))
-      fml_np <- as.formula(paste("yn ~", paste(names(df_np)[-1], collapse = " + ")))
-      
-      bw_obj <- np::npregbw(fml_np, data = df_np, regtype = "lc", bwmethod = "normal-reference") 
-        raw_bws <- bw_obj$bw 
-        
-        folds <- sample(rep(1:K_folds, length.out = n))
-          eta <- numeric(n)
-          
-          for(k in 1:K_folds) {
-                  train_df <- df_np[folds != k, , drop = FALSE]
-              test_df  <- df_np[folds == k, , drop = FALSE]
-                  
-                  mod_k <- np::npreg(bws = raw_bws, 
-                                    txdat = train_df[, -1, drop = FALSE], 
-                                    tydat = train_df[, 1],
-                                    ckertype = "epa")
-                  
-                  eta[folds == k] <- as.numeric(predict(mod_k, newdata = test_df[, -1, drop = FALSE]))
-                    }
+  df_np <- data.frame(yn = y, v0 = v0_std, v1 = v1_std)
+  if (d > 0) df_np <- cbind(df_np, as.data.frame(x_mat_std))
+    fml_np <- as.formula(paste("yn ~", paste(names(df_np)[-1], collapse = " + ")))
+    
+    bw_obj <- np::npregbw(fml_np, data = df_np, regtype = "lc", bwmethod = "cv.aic") 
+    raw_bws <- bw_obj$bw 
+    
+    folds <- sample(rep(1:K_folds, length.out = n))
+    eta <- numeric(n)
+    
+    for(k in 1:K_folds) {
+        train_df <- df_np[folds != k, , drop = FALSE]
+        test_df  <- df_np[folds == k, , drop = FALSE]
             
-            eta <- pmin(pmax(eta, min(y)), max(y))
+        mod_k <- np::npreg(bws = raw_bws, 
+                              txdat = train_df[, -1, drop = FALSE], 
+                              tydat = train_df[, 1],
+                              ckertype = "epa")
+            
+        eta[folds == k] <- as.numeric(predict(mod_k, newdata = test_df[, -1, drop = FALSE]))
+    }
+      
+    eta <- pmin(pmax(eta, min(y)), max(y))
   
   # --- 3. Sample Minimum (Multi-Start BOBYQA) ---
   if(verbose) cat(sprintf(">> [3/5] Finding global sample minimum (%d starts)...\n", n_starts))

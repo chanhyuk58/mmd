@@ -55,7 +55,9 @@ cat(">> All workers initialized successfully. Starting Monte Carlo...\n")
 
 # Monte Carlo Simulation
 set.seed(4875995)
-results_list <- foreach(i = 1:mc_reps, .errorhandling = "stop") %dofuture% {
+results_list <- foreach(i = 1:mc_reps, 
+                        options.future = list(seed = TRUE), 
+                        .errorhandling = "stop") %dofuture% {
   
   # Generate Data
   sim <- gen_pop(
