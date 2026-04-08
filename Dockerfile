@@ -12,9 +12,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install R packages
-RUN R -e "options(Ncpus = parallel::detectCores()); \
-    install.packages(c('np', 'Rcpp', 'nloptr', 'doFuture', 'foreach'), \
+RUN R -e "pkgs <- c('ranger', 'np', 'Rcpp', 'nloptr', 'doFuture', 'foreach'); \
+    options(Ncpus = parallel::detectCores()); \
+    install.packages(pkgs, \
     repos='https://cloud.r-project.org/')" \
-    && R -e "pkgs <- c('np', 'Rcpp', 'nloptr', 'doFuture', 'foreach'); \
-    inst <- installed.packages()[, 'Package']; \
+    && R -e "inst <- installed.packages()[, 'Package']; \
     if (!all(pkgs %in% inst)) stop(paste('Missing:', pkgs[!pkgs %in% inst]))"
