@@ -5,6 +5,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libnlopt-dev \
     libgsl-dev \
     libomp-dev \
+    libblas-dev \
+    liblapack-dev \
     cmake \
     pkg-config \
     zlib1g-dev \
@@ -13,8 +15,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Install R packages
 RUN R -e "pkgs <- c('ranger', 'np', 'Rcpp', 'nloptr', 'doFuture', 'foreach'); \
-    options(Ncpus = parallel::detectCores()); \
-    install.packages(pkgs, \
-    repos='https://cloud.r-project.org/')" \
-    && R -e "inst <- installed.packages()[, 'Package']; \
-    if (!all(pkgs %in% inst)) stop(paste('Missing:', pkgs[!pkgs %in% inst]))"
+    options(Ncpus = 2); \
+    install.packages(pkgs, repos='https://cloud.r-project.org/'); \
+    inst <- installed.packages()[, 'Package']; \
+    if (!all(pkgs %in% inst)) { \
+        cat('\n\nFAILED INSTALLATION:\n'); \
+        print(setdiff(pkgs, inst)); \
+        quit(status = 1); \
+    }"
