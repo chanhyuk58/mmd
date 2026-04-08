@@ -4,7 +4,7 @@ library(dplyr)
 library(Rcpp)
 library(splines)
 library(nloptr)
-library(np)
+library(ranger)
 
 cat("Packages loaded ...\n")
 
@@ -25,43 +25,22 @@ lsb_hosts <- Sys.getenv("LSB_HOSTS")
 n_cores <- if (lsb_hosts != "") length(strsplit(lsb_hosts, " ")[[1]]) else (parallel::detectCores() - 1)
 
 registerDoFuture()
-cat(sprintf(">> Registered %d local sockets.\n", n_cores))
+plan(multisession, workers = n_cores)
+cat(sprintf(">> Registered %d workers.\n", n_cores))
 
-# --- 3. Worker Initialization ---
-cat(">> Initializing workers one-by-one to prevent filesystem congestion...\n")
-
-worker_ids <- 1:n_cores
-
-for (id in worker_ids) {
-  f <- future({
-    library(Rcpp)
-    library(splines)
-    library(nloptr)
-    library(dplyr)
-    library(np)
-
-    Rcpp::sourceCpp("./mmd_cpp.cpp", cacheDir = "./cpp_cache")
-
-    source("./mmd_cpp.R")
-    source("./generate_pop.R")
-
-    return(TRUE)
-  })
-  value(f)
-
-  if (id %% 10 == 0) cat(sprintf("   [%d/%d] workers ready...\n", id, n_cores))
-  Sys.sleep(0.1) # Breathe
-}
-
-cat(">> All workers initialized successfully. Starting Monte Carlo...\n")
+cat(">> Starting Monte Carlo...\n")
 
 # Monte Carlo Simulation
 
 set.seed(4875995)
 results_list <- foreach(i = 1:mc_reps,
-                        options.future = list(seed = TRUE),
+                        .options.future = list(seed = TRUE),
                         .errorhandling = "stop") %dofuture% {
 
+  # Load code on each worker (C++ cached, so fast after first call)
+  Rcpp::sourceCpp("./mmd_cpp.cpp", cacheDir = "./cpp_cache")
+  source("./mmd_cpp.R")
+  source("./generate_pop.R")
 
   # Generate Data
   sim <- gen_pop(

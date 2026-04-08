@@ -6,7 +6,7 @@ library(stats)
   
 
 if(file.exists("mmd_cpp.cpp")) {
-  Rcpp::sourceCpp("mmd_cpp.cpp")
+  Rcpp::sourceCpp("mmd_cpp.cpp", cacheDir = "./cpp_cache")
 } else {
   stop("Error: 'mmd_cpp.cpp' not found.")
 }
@@ -66,37 +66,64 @@ MMD_bounds <- function(formula, data, v0_col, v1_col,
   scale_vec <- c(1.0, sd_v, sd_x)
   
   # --- 2. Nuisance Parameter (eta) via cross-fitting ---
-  if(verbose) cat(sprintf(">> [2/5] Estimating eta via %d-Fold Cross-Fitting (Series)...\n", K_folds))
-  
-  df_np <- data.frame(yn = y, v0 = v0_std, v1 = v1_std)
-  if (d > 0) df_np <- cbind(df_np, as.data.frame(x_mat_std))
-    fml_np <- as.formula(paste("yn ~", paste(names(df_np)[-1], collapse = " + ")))
-    
-    bw_obj <- np::npregbw(fml_np, data = df_np, regtype = "lc", bwmethod = "cv.aic") 
-    raw_bws <- bw_obj$bw 
-    
-    folds <- sample(rep(1:K_folds, length.out = n))
-    eta <- numeric(n)
-    
-    for(k in 1:K_folds) {
-        train_df <- df_np[folds != k, , drop = FALSE]
-        test_df  <- df_np[folds == k, , drop = FALSE]
-            
-        mod_k <- np::npreg(bws = raw_bws, 
-                              txdat = train_df[, -1, drop = FALSE], 
-                              tydat = train_df[, 1],
-                              ckertype = "epa")
-            
-        eta[folds == k] <- as.numeric(predict(mod_k, newdata = test_df[, -1, drop = FALSE]))
-    }
-      
-    eta <- pmin(pmax(eta, min(y)), max(y))
+  if(verbose) cat(sprintf(">> [2/5] Estimating eta via %d-Fold Cross-Fitting (ranger)...\n", K_folds))
+
+  df_rf <- data.frame(yn = y, v0 = v0_std, v1 = v1_std)
+  if (d > 0) df_rf <- cbind(df_rf, as.data.frame(x_mat_std))
+
+  folds <- sample(rep(1:K_folds, length.out = n))
+  eta <- numeric(n)
+
+  for(k in 1:K_folds) {
+    train_df <- df_rf[folds != k, , drop = FALSE]
+    test_df  <- df_rf[folds == k, , drop = FALSE]
+
+    rf_k <- ranger::ranger(yn ~ ., data = train_df, num.trees = 500)
+    eta[folds == k] <- predict(rf_k, data = test_df)$predictions
+  }
+
+  eta <- pmin(pmax(eta, min(y)), max(y))
+
+  # --- [COMMENTED OUT] Original kernel regression (np) ---
+  # Replaced by ranger: np::npregbw is extremely slow with 7+ covariates
+  # (curse of dimensionality), and bandwidth was estimated on the full
+  # sample before cross-fitting, leaking information across folds.
+  #
+  # df_np <- data.frame(yn = y, v0 = v0_std, v1 = v1_std)
+  # if (d > 0) df_np <- cbind(df_np, as.data.frame(x_mat_std))
+  #   fml_np <- as.formula(paste("yn ~", paste(names(df_np)[-1], collapse = " + ")))
+  #
+  #   bw_obj <- np::npregbw(fml_np, data = df_np, regtype = "lc", bwmethod = "cv.aic")
+  #   raw_bws <- bw_obj$bw
+  #
+  #   folds <- sample(rep(1:K_folds, length.out = n))
+  #   eta <- numeric(n)
+  #
+  #   for(k in 1:K_folds) {
+  #       train_df <- df_np[folds != k, , drop = FALSE]
+  #       test_df  <- df_np[folds == k, , drop = FALSE]
+  #
+  #       mod_k <- np::npreg(bws = raw_bws,
+  #                             txdat = train_df[, -1, drop = FALSE],
+  #                             tydat = train_df[, 1],
+  #                             ckertype = "epa")
+  #
+  #       eta[folds == k] <- as.numeric(predict(mod_k, newdata = test_df[, -1, drop = FALSE]))
+  #   }
+  #
+  #   eta <- pmin(pmax(eta, min(y)), max(y))
   
   # --- 3. Sample Minimum (Multi-Start BOBYQA) ---
   if(verbose) cat(sprintf(">> [3/5] Finding global sample minimum (%d starts)...\n", n_starts))
-  
+
+  # Pre-coerce once to avoid redundant copies on every optimizer call
+  x_mat_std_m <- as.matrix(x_mat_std)
+  v0_std_n <- as.numeric(v0_std)
+  v1_std_n <- as.numeric(v1_std)
+  eta_n <- as.numeric(eta)
+
   obj_fun_R <- function(par_std) {
-    Q_obj_cpp(as.matrix(x_mat_std), as.numeric(v0_std), as.numeric(v1_std), as.numeric(par_std), as.numeric(eta))
+    Q_obj_cpp(x_mat_std_m, v0_std_n, v1_std_n, par_std, eta_n)
   }
   
   opts_unconstr <- list("algorithm" = "NLOPT_LN_BOBYQA", "xtol_rel" = 1e-7, "maxeval" = 10000)
@@ -130,7 +157,7 @@ MMD_bounds <- function(formula, data, v0_col, v1_col,
     
     for(i in 1:B) {
       idx <- sample(0:(n-1), b_size, replace = FALSE)
-      sub_obj <- function(p_std) Q_obj_subsample_cpp(as.matrix(x_mat_std), as.numeric(v0_std), as.numeric(v1_std), as.numeric(p_std), as.numeric(eta), idx)
+      sub_obj <- function(p_std) Q_obj_subsample_cpp(x_mat_std_m, v0_std_n, v1_std_n, p_std, eta_n, idx)
       opt_sub <- nloptr(x0 = theta_hat_std, eval_f = sub_obj, opts = opts_sub)
       W_stats[i] <- b_size * (sub_obj(theta_hat_std) - opt_sub$objective)
     }
