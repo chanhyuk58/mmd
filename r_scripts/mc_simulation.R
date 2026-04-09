@@ -37,8 +37,10 @@ results_list <- foreach(i = 1:mc_reps,
                         .options.future = list(seed = TRUE),
                         .errorhandling = "stop") %dofuture% {
 
-  # Load code on each worker (C++ cached, so fast after first call)
-  Rcpp::sourceCpp("./mmd_cpp.cpp", cacheDir = "./cpp_cache")
+  # Load code on each worker (per-worker cache to avoid race conditions)
+  worker_cache <- file.path("./cpp_cache", paste0("worker_", Sys.getpid()))
+  if (!dir.exists(worker_cache)) dir.create(worker_cache, recursive = TRUE)
+  Rcpp::sourceCpp("./mmd_cpp.cpp", cacheDir = worker_cache)
   source("./mmd_cpp.R")
   source("./generate_pop.R")
 
