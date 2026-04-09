@@ -6,7 +6,7 @@ library(stats)
   
 
 if(file.exists("mmd_cpp.cpp")) {
-  Rcpp::sourceCpp("mmd_cpp.cpp", cacheDir = "./cpp_cache")
+  Rcpp::sourceCpp("mmd_cpp.cpp", cacheDir = tempdir())
 } else {
   stop("Error: 'mmd_cpp.cpp' not found.")
 }
