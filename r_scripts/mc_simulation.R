@@ -51,6 +51,7 @@ results_list <- foreach(i = 1:mc_reps,
 
   # Load pre-compiled C++ shared object (no per-worker compilation needed)
   dyn.load(compiled_so)
+  assign(".mmd_cpp_loaded", TRUE, envir = globalenv())
   source("./mmd_cpp.R")
   source("./generate_pop.R")
 
