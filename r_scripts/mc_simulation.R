@@ -20,9 +20,21 @@ cat(">> Master: Compiling C++ backend...\n")
 Rcpp::sourceCpp("./mmd_cpp.cpp", cacheDir = cache_path)
 cat(">> Master: Compilation complete.\n")
 
+# Find the compiled shared object so workers can load it directly
+compiled_so <- list.files(cache_path, pattern = "\\.so$|\\.dll$", recursive = TRUE, full.names = TRUE)
+if (length(compiled_so) == 0) stop("Could not find compiled shared object in cache.")
+compiled_so <- normalizePath(compiled_so[1])
+cat(sprintf(">> Compiled SO: %s\n", compiled_so))
+
 # --- 2. Setup Cluster ---
 lsb_hosts <- Sys.getenv("LSB_HOSTS")
-n_cores <- if (lsb_hosts != "") length(strsplit(lsb_hosts, " ")[[1]]) else (parallel::detectCores() - 1)
+n_cores <- if (lsb_hosts != "") {
+  n_alloc <- length(strsplit(lsb_hosts, " ")[[1]])
+  # Cap at available physical cores to avoid oversubscription
+  min(n_alloc, parallel::detectCores(logical = FALSE))
+} else {
+  max(1, parallel::detectCores() - 1)
+}
 
 registerDoFuture()
 plan(multisession, workers = n_cores)
@@ -37,10 +49,8 @@ results_list <- foreach(i = 1:mc_reps,
                         .options.future = list(seed = TRUE),
                         .errorhandling = "stop") %dofuture% {
 
-  # Load code on each worker (per-worker cache to avoid race conditions)
-  worker_cache <- file.path("./cpp_cache", paste0("worker_", Sys.getpid()))
-  if (!dir.exists(worker_cache)) dir.create(worker_cache, recursive = TRUE)
-  Rcpp::sourceCpp("./mmd_cpp.cpp", cacheDir = worker_cache)
+  # Load pre-compiled C++ shared object (no per-worker compilation needed)
+  dyn.load(compiled_so)
   source("./mmd_cpp.R")
   source("./generate_pop.R")
 
