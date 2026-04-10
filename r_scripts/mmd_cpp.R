@@ -178,13 +178,36 @@ MMD_bounds <- function(formula, data, v0_col, v1_col,
     opts_proj <- list("algorithm" = "NLOPT_LN_AUGLAG", "local_opts" = local_opts, "xtol_rel" = 1e-5, "maxeval" = 5000)
     lb <- rep(-param_bounds, p); ub <- rep(param_bounds, p)
     
-    run_proj <- function(obj_dir, tau) {
-      opt <- nloptr(theta_hat_std, eval_f = obj_dir, eval_g_ineq = function(x) obj_fun_R(x)-tau, lb=lb, ub=ub, opts=opts_proj)
-      if (obj_fun_R(opt$solution) > tau + 1e-4) return(NA) 
-      return(opt$objective)
+    # Generate diverse feasible starting points for multi-start projection
+    n_proj_starts <- max(n_starts * 3, 15)
+    proj_starts <- vector("list", n_proj_starts)
+    proj_starts[[1]] <- theta_hat_std
+    for (s in 2:n_proj_starts) {
+      proj_starts[[s]] <- runif(p, -param_bounds * 0.8, param_bounds * 0.8)
     }
-    
+    proj_starts <- Filter(function(x0) obj_fun_R(x0) <= tau_ID, proj_starts)
+    if (length(proj_starts) == 0) proj_starts <- list(theta_hat_std)
+    if(verbose) cat(sprintf("       Using %d feasible starting points.\n", length(proj_starts)))
+
+    run_proj <- function(obj_dir, tau) {
+      best_val <- Inf
+      for (x0 in proj_starts) {
+        opt <- tryCatch(
+          nloptr(x0, eval_f = obj_dir,
+                 eval_g_ineq = function(x) obj_fun_R(x) - tau,
+                 lb = lb, ub = ub, opts = opts_proj),
+          error = function(e) NULL
+        )
+        if (!is.null(opt) && obj_fun_R(opt$solution) <= tau + 1e-4) {
+          best_val <- min(best_val, opt$objective)
+        }
+      }
+      if (is.infinite(best_val)) return(NA)
+      return(best_val)
+    }
+
     for(k in 1:p) {
+      if(verbose) cat(sprintf("       Projecting %s...\n", param_names[k]))
       if (k == 1) {
         eval_dir <- function(x) {
           raw_slopes_x <- if(d > 0) (x[3:p] / sd_x) else 0
