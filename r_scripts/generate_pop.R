@@ -10,7 +10,7 @@ gen_pop <- function(
   beta_gdp = -0.25,
   beta_democ = -0.05,
   beta_eth = 0.02,
-  beta_pop = 0.05,
+  beta_pop = 0.28,
   beta_ref = 0.05,
   beta_v = -0.503,
   mean_gdp = 8.5,

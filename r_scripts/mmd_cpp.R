@@ -180,10 +180,10 @@ MMD_bounds <- function(formula, data, v0_col, v1_col,
     
     run_proj <- function(obj_dir, tau) {
       opt <- nloptr(theta_hat_std, eval_f = obj_dir, eval_g_ineq = function(x) obj_fun_R(x)-tau, lb=lb, ub=ub, opts=opts_proj)
-      if (obj_fun_R(opt$solution) > tau + 1e-4) return(NA)
+      if (obj_fun_R(opt$solution) > tau + 1e-4) return(NA) 
       return(opt$objective)
     }
-
+    
     for(k in 1:p) {
       if (k == 1) {
         eval_dir <- function(x) {
