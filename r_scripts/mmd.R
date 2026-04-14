@@ -119,9 +119,9 @@ for (n in ns) {
       n = n
     )
     mc_results <- rbind(mc_results, temp)
+    stopCluster(cl)
   }
 }
-# stopCluster(cl)
 # }}}
 
 write_excel_csv(mc_results, file='../data/mc_results.csv', na='')
@@ -244,16 +244,17 @@ mc_results %>%
 
 # For multidimensional X
 
-d <- ncol(pop$x[[1]])  # or just set d directly
+x_cols <- grep("^X\\d+$", names(pop), value = TRUE)
+d <- length(x_cols)
 param_len <- 2 + d  # gamma0, gamma1, gamma_x1, ..., gamma_xd
 
 for (n in ns) {
   for (i in 1:mc) {
     idx <- sample(N, n, replace=FALSE)
-    yn <- pop[idx, 'y'][[1]]
-    xn <- do.call(rbind, pop[idx, 'x'])  # convert list column to matrix
-    v0n <- pop[idx, 'v0'][[1]]
-    v1n <- pop[idx, 'v1'][[1]]
+    yn <- pop[idx, 'y']
+    xn <- as.matrix(pop[idx, x_cols])
+    v0n <- pop[idx, 'v0']
+    v1n <- pop[idx, 'v1']
 
     X.eval <- data.table(v0n, v1n, xn)
 

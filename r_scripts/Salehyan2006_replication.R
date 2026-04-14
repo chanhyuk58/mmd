@@ -173,10 +173,10 @@ length(unique(sg1$year))
 summary(sg1$peace1_max - sg1$peace1_min)
 sg1[sg1$peace1_max < sg1$peace1_min, c("stateid", "year", "peace1", "peace1_max", "peace1_min")]
 
-# gleditschsalehyan1 <- MMD_bounds_cpp(
+# gleditschsalehyan1 <- MMD_bounds(
 #   nonset ~ logref2 + nbcwbin + polityb + polityb2 + lngdp + het,
-#   v0 = "peace1_min",
-#   v1 = "peace1_max",
+#   v0_col = "peace1_min",
+#   v1_col = "peace1_max",
 #   data = na.omit(sg1[ ,..Xs])
 # )
 #
@@ -190,10 +190,10 @@ sg1[sg1$peace1_max < sg1$peace1_min, c("stateid", "year", "peace1", "peace1_max"
 # sg2 <- copy(sg1)
 # sg2 <- sg2[, peace1_max := ifelse(peace1_max >= 30, 30, peace1_max)]
 #
-# gleditschsalehyan2 <- MMD_bounds_cpp(
+# gleditschsalehyan2 <- MMD_bounds(
 #   nonset ~ logref2 + nbcwbin + polityb + polityb2 + lngdp + het,
-#   v0 = "peace1_min",
-#   v1 = "peace1_max",
+#   v0_col = "peace1_min",
+#   v1_col = "peace1_max",
 #   data = na.omit(sg2[ ,..Xs])
 # )
 #
@@ -208,17 +208,17 @@ sg1 <- fread("../data/sg1_at5.csv")
 sg2 <- copy(sg1)
 sg2 <- sg2[, peace1_max := ifelse(peace1_max >= 5, 5, peace1_max)]
 
-gleditschsalehyan2 <- MMD_bounds_cpp(
+gleditschsalehyan2 <- MMD_bounds(
   nonset ~ logref2 + nbcwbin + polityb + polityb2 + lngdp + het,
-  v0 = "peace1_min",
-  v1 = "peace1_max",
+  v0_col = "peace1_min",
+  v1_col = "peace1_max",
   data = na.omit(sg2[ ,..Xs])
 )
 
 print(summary(gleditschsalehyan2))
 
 tab <- cbind(colnames, summary(gleditschsalehyan2)$stats)
-print(xtable(tab), include.rownames = FALSE, 
+print(xtable(tab), include.rownames = FALSE,
   file = "../data/Salehyan_mmd_ceiling_at5.csv")
 
 # Unit Max
@@ -226,10 +226,10 @@ sg1 <- fread("../data/sg1_unit_max.csv")
 sg2 <- copy(sg1)
 sg2 <- sg2[, peace1_max := ifelse(peace1_max >= 5, 5, peace1_max)]
 
-gleditschsalehyan2 <- MMD_bounds_cpp(
+gleditschsalehyan2 <- MMD_bounds(
   nonset ~ logref2 + nbcwbin + polityb + polityb2 + lngdp + het,
-  v0 = "peace1_min",
-  v1 = "peace1_max",
+  v0_col = "peace1_min",
+  v1_col = "peace1_max",
   data = na.omit(sg2[ ,..Xs])
 )
 
