@@ -1,7 +1,8 @@
 library("data.table")
 library("xtable")
+library("here")
 # library("texreg")
-source("mmd_cpp.R")
+# source("mmd_cpp.R")
 
 # Identified the coding error for the peace1 year interval.
 # peace1_max > peace1_min does not hold for every sample.
@@ -9,11 +10,13 @@ source("mmd_cpp.R")
 # differently across the data. Thus, naive calculation based on 
 # one data causes errors.
 
-sg <- foreign::read.dta("../../gleditschsalehyan/R Replication/gleditsch_salehyan_correctedtime.dta")
-readr::write_excel_csv(sg, file="../data/sg.csv")
+sg <- foreign::read.dta(
+        here("gleditschsalehyan", "R\ Replication", "gleditsch_salehyan_correctedtime.dta")
+)
+
 sg <- as.data.table(sg)
-head(sg)
-names(sg)
+# head(sg)
+# names(sg)
 
 # outcome: nonset / bigconset civil war onset at the year. based on the definition of "war"
 # explanatory: peace1 peace time duration. This is the left-censored var.
@@ -32,13 +35,13 @@ summary(t4m2) # Successful replication of the original result.
 #    - Minimum: From the starting year of the dataset.
 
 # Merge with country formation year dataset
-states2016 <- fread("../data/states2016.csv")
-# head(states2016)
-states2016 <- states2016[!is.na(ccode), ]
-states2016 <- states2016[, .SD[which.min(styear)], ccode][, .(ccode, styear)]
-# states2016[, order(.N), ccode]
+states2024 <- fread(here("data", "statelist2024.csv"))
+# head(states2024)
+states2024 <- states2024[!is.na(ccode), ]
+states2024 <- states2024[, .SD[which.min(styear)], ccode][, .(ccode, styear)]
+# states2024[, order(.N), ccode]
 
-sg <- merge(sg, states2016, by=c("ccode"), all.x=T)
+sg <- merge(sg, states2024, by=c("ccode"), all.x=T)
 # head(sg)
 # names(sg)
 

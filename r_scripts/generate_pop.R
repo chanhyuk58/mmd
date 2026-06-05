@@ -3,22 +3,21 @@ library(tidyr)
 
 gen_pop <- function(
   J = 500,
-  T_full = 100,
-  birth_range = c(1, 50),
-  obs_start_range = c(50, 90),
-  beta_0 = -2,
-  beta_gdp = -0.25,
-  beta_democ = -0.05,
+  T_full = 150,
+  birth_range = c(1, 40),
+  obs_start_range = c(100, 140),
+  beta_0 = 0.11,
+  beta_gdp = -0.05,
+  beta_democ = -0.02,
   beta_eth = 0.02,
-  beta_pop = 0.28,
-  beta_ref = 0.05,
-  beta_v = -0.503,
+  beta_pop = 0.03,
+  beta_ref = 0.01,
+  beta_v = -0.003,
   mean_gdp = 8.5,
   mean_pop = 16.0,
   gdp_shock = 0.05
 ) {
 
-  # 1. Meta-Data & Fixed Effects
   country_meta <- data.frame(country = 1:J) %>%
     mutate(
       birth_year = sample(birth_range[1]:birth_range[2], J, replace = TRUE),
@@ -27,7 +26,6 @@ gen_pop <- function(
       eth_het = runif(J, -1, 1)
     )
 
-  # 2. Initialize Time-Varying Vectors
   N_total <- J * T_full
   ids <- rep(1:J, each = T_full)
   years <- rep(1:T_full, times = J)
@@ -41,15 +39,13 @@ gen_pop <- function(
 
   idx_mat <- matrix(1:N_total, nrow = T_full, ncol = J, byrow = FALSE)
 
-  # 3. Initialization (t=1)
   t1 <- idx_mat[1, ]
   log_gdp[t1] <- rnorm(J, mean_gdp, 1.0)
-  log_pop[t1] <- rnorm(J, mean_pop, 1.5)
+  log_pop[t1] <- rnorm(J, mean_pop, 1.65)
   log_ref[t1] <- rgamma(J, shape = 2, scale = 0.5)
   democ[t1] <- rbinom(J, 1, 0.5)
   true_duration[t1] <- 0
 
-  # 4. Time Loop
   birth_years_vec <- country_meta$birth_year
   eth_het_vec <- country_meta$eth_het
 
@@ -64,7 +60,6 @@ gen_pop <- function(
     dem_lag <- democ[prev]
     dur_lag <- true_duration[prev]
 
-    # Updates (Same dynamics as before)
     shock <- ifelse(y_lag == 1, -gdp_shock, 0)
     log_gdp[curr] <- 0.95 * gdp_lag + 0.05 * mean_gdp + rnorm(J, 0, 0.1) + shock
 
@@ -81,7 +76,6 @@ gen_pop <- function(
     reset <- (y_lag == 1) | is_birth
     true_duration[curr] <- ifelse(reset, 0, dur_lag + 1)
 
-    # --- LINEAR PROBABILITY MODEL GENERATION ---
     active <- (t >= birth_years_vec)
     if(any(active)) {
       act <- curr[active]
@@ -94,14 +88,11 @@ gen_pop <- function(
                   beta_ref * log_ref[act] +
                   beta_v * true_duration[act]
 
-      # Clamp probabilities to [0, 1]
       probs <- pmin(pmax(lin_pred, 0), 1)
-
       onset[act] <- rbinom(length(act), 1, probs)
     }
   }
 
-  # 5. Construct Data Frame
   full_data <- data.frame(
     country = ids,
     year = years,
@@ -114,7 +105,6 @@ gen_pop <- function(
   ) %>%
     left_join(country_meta, by = "country")
 
-  # 6. Apply Observation Window & Bounds
   obs_data <- full_data %>%
     filter(year >= birth_year) %>%
     filter(year >= obs_start_year) %>%
@@ -144,38 +134,16 @@ gen_pop <- function(
 }
 
 gen_pop_simple <- function(
-                           n = 1000,
-                           p = 5
-                           ){
-    gamma = c(1, 1, rep(-1, p))
-    v <- runif(n, -2, 3) # try uniform distribution
+  n = 1000,
+  p = 5
+) {
+  gamma = c(1, 1, rep(-1, p))
+  v <- runif(n, -2, 3)
+  v1 = ceiling(v)
+  v0 <- v1 - 1
+  x <- matrix(runif(n * p), nrow = n, ncol = p)
+  eps <- rnorm(n, 0, 1)
+  y <- gamma[1] + gamma[2]*v + x %*% gamma[3:length(gamma)] + eps
 
-    ## Observed
-    v1 = ceiling(v)
-    v0 <- v1 - 1
-    # x <- runif(N, 0, 5) # try uniform distribution
-    # multivariate uniform distribution
-    x <- matrix(runif(n * p), nrow = n, ncol = p)
-    ## Error
-    eps <- rnorm(n, 0, 1)
-
-    ## y
-    y <- gamma[1] + gamma[2]*v + x %*% gamma[3:length(gamma)] + eps
-
-    df <- data.frame(y, x, v0, v1)
-    return(df)
-}
-
-# Sample test
-if (FALSE) {
-  pop <- gen_pop(
-    J = 100, T_full = 100,
-    birth_range = c(1, 50),
-    obs_start_range = c(50, 90),
-    beta_0 = 0.10,
-  )
-
-  print(pop$data)
-  print(sum(pop$data$onset))
-  print(mean(pop$data$onset))
+  return(data.frame(y, x, v0, v1))
 }
