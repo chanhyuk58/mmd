@@ -34,8 +34,6 @@ sg <- sg %>%
   ) %>%
   ungroup()
 
-mean(sg$first_war1_idx > 1) # 0.9655% of the data points are not censored
-mean(sg$first_war2_idx > 1) # 0.9725% of the data points are not censored
 mean(sg$nonset, na.rm=TRUE)
 sd(sg$lngdp, na.rm = TRUE)
 sd(sg$lnpop, na.rm = TRUE)
@@ -60,6 +58,7 @@ sg_most_conserv <- sg %>%
   select(-potential_max1, -potential_max2, -is_censored1, -is_censored2, -first_war1_idx, -first_war2_idx)
 
 summary(sg_most_conserv$peace1_width)
+mean(sg_most_conserv$peace1_width != 0, na.rm = TRUE) # 0.376 of the data points are censored.
 txtdensity(na.omit(sg_most_conserv$peace1_width))
 
 write_csv(sg_most_conserv, here("data", "sg1_most_conserv.csv"))

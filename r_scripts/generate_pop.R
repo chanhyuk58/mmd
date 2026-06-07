@@ -2,10 +2,10 @@ library(dplyr)
 library(tidyr)
 
 gen_pop <- function(
-  J = 500,
+  J = 205,
   T_full = 150,
   birth_range = c(1, 40),
-  obs_start_range = c(100, 140),
+  obs_start_range = c(115, 145),
   beta_0 = 0.11,
   beta_gdp = -0.05,
   beta_democ = -0.02,
