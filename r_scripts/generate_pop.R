@@ -138,8 +138,8 @@ gen_pop_simple <- function(
 ) {
   gamma = c(1, -1, 1)
   v <- runif(n, -2, 3)
-  v1 <- floor(v)
-  v0 <- v1 - 1
+  v0 <- floor(v)
+  v1 <- v0 + 1
   x <- runif(n, 0, 5)
   eps <- rnorm(n, 0, 1)
   y <- gamma[1] + gamma[2]*x + v*gamma[3] + eps
