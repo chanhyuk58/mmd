@@ -135,15 +135,17 @@ gen_pop <- function(
 
 gen_pop_simple <- function(
   n = 1000,
-  p = 5
 ) {
-  gamma = c(1, 1, rep(-1, p))
+  gamma = c(1, -1, 1)
   v <- runif(n, -2, 3)
-  v1 = ceiling(v)
+  v1 <- floor(v)
   v0 <- v1 - 1
-  x <- matrix(runif(n * p), nrow = n, ncol = p)
+  x <- runif(n, 0, 5)
   eps <- rnorm(n, 0, 1)
-  y <- gamma[1] + gamma[2]*v + x %*% gamma[3:length(gamma)] + eps
+  y <- gamma[1] + gamma[2]*x + v*gamma[3] + eps
 
-  return(data.frame(y, x, v0, v1))
+  return(data.frame(
+          y=as.numeric(y), 
+          v, x, v0, v1
+        ))
 }
