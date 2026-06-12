@@ -14,7 +14,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install R packages
-RUN R -e "pkgs <- c('ranger', 'np', 'Rcpp', 'nloptr', 'doFuture', 'foreach'); \
+RUN R -e "pkgs <- c('ranger', 'np', 'Rcpp', 'nloptr', 'doFuture', 'foreach', 'lpSolve'); \
     options(Ncpus = 2); \
     install.packages(pkgs, repos='https://cloud.r-project.org/'); \
     inst <- installed.packages()[, 'Package']; \
