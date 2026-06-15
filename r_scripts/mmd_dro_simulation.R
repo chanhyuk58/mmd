@@ -2,10 +2,10 @@ library(doFuture)
 library(foreach)
 library(dplyr)
 library(stats)
+library(lpSolve)
 
 cat(">> Packages loaded successfully...\n")
 
-# Source our pure R modular files
 source("./generate_pop.R")
 source("./mmd_dro_diag.R")
 source("./mmd_dro.R")
@@ -32,18 +32,19 @@ cat(">> Starting Monte Carlo Simulation...\n")
 
 # --- 3. Parallel Execution ---
 results_list <- foreach(i = 1:mc_reps,
-                        .options.future = list(seed = TRUE),
-                        .errorhandling = "stop") %dofuture% {
-  
+                        .options.future = list(
+                          seed = TRUE,
+                          packages = c("splines", "nloptr", "ranger", "lpSolve", "stats", "dplyr")
+                        ),
+                        .errorhandling = "stop") %dofuture% {  
   source("./generate_pop.R")
   source("./mmd_dro.R")
 
-  # Generate Population
+  # Generate Toy Baseline Population (Continuous Y, Interval-Censored V)
   pop <- gen_pop_simple(n = 1000)
   colnames(pop) <- c("y", "x", "v0", "v1")
   
   # True Parameters from Manski and Tamer
-  # Intercept = 1, beta_x = -1, gamma_v = 1
   true_params <- c("(Intercept)" = 1, "x" = -1, "latent_v0" = 1)
 
   # Estimation A: Direct LP Projection (Exact & Global)
@@ -68,11 +69,11 @@ results_list <- foreach(i = 1:mc_reps,
     param     = names(true_params),
     truth     = as.numeric(true_params),
     # Projection Results
-    proj_low  = fit_proj$results[["Inf"]]$bounds_ID$Lower,
-    proj_upp  = fit_proj$results[["Inf"]]$bounds_ID$Upper,
+    proj_low  = fit_proj$results[["Inf"]]$bounds_ID[names(true_params), "Lower"],
+    proj_upp  = fit_proj$results[["Inf"]]$bounds_ID[names(true_params), "Upper"],
     # Profile Results
-    prof_low  = fit_prof$results[["Inf"]]$bounds_ID$Lower,
-    prof_upp  = fit_prof$results[["Inf"]]$bounds_ID$Upper
+    prof_low  = fit_prof$results[["Inf"]]$bounds_ID[names(true_params), "Lower"],
+    prof_upp  = fit_prof$results[["Inf"]]$bounds_ID[names(true_params), "Upper"]
   )
 
   # Calculate Coverage

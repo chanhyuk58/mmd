@@ -134,7 +134,7 @@ gen_pop <- function(
 }
 
 gen_pop_simple <- function(
-  n = 1000,
+  n = 1000
 ) {
   gamma = c(1, -1, 1)
   v <- runif(n, -2, 3)
