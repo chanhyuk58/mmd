@@ -49,7 +49,6 @@ mmd_dro <- function(formula, data, v0_col, v1_col,
   intercept_idx <- which(colnames(full_x_mat) == "(Intercept)")
   x_mat <- if(length(intercept_idx) > 0) full_x_mat[, -intercept_idx, drop=FALSE] else full_x_mat
   
-  # a clean numeric vector even if 'data' is a tibble
   valid_idx <- as.integer(rownames(mf))
   v0 <- as.numeric(data[[v0_col]][valid_idx])
   v1_max <- as.numeric(data[[v1_col]][valid_idx]) 
@@ -58,13 +57,10 @@ mmd_dro <- function(formula, data, v0_col, v1_col,
   param_names <- c("(Intercept)", paste0("latent_", v0_col), colnames(x_mat))
   p <- length(param_names)
   
-  # --- 1b. Standardization ---
-  # Anchor mean and SD of V to the uncensored subpopulation
+  # --- 1b. INVISIBLE PURE STANDARDIZATION ---
   uncensored_v0 <- v0[v1_max == v0]
   
-  if (length(uncensored_v0) > 1 && 
-      !is.na(sd(uncensored_v0, na.rm = TRUE)) && 
-      sd(uncensored_v0, na.rm = TRUE) > 0) {
+  if (length(uncensored_v0) > 1 && !is.na(sd(uncensored_v0, na.rm = TRUE)) && sd(uncensored_v0, na.rm = TRUE) > 0) {
     mu_v <- mean(uncensored_v0, na.rm = TRUE)
     sd_v <- sd(uncensored_v0, na.rm = TRUE)
   } else {
@@ -76,17 +72,10 @@ mmd_dro <- function(formula, data, v0_col, v1_col,
   v0_std <- (v0 - mu_v) / sd_v
   v1_max_std <- (v1_max - mu_v) / sd_v
   
-  if (d > 0) {
-    mu_x <- colMeans(x_mat, na.rm = TRUE)
-    sd_x <- sapply(as.data.frame(x_mat), sd, na.rm = TRUE)
-    sd_x[sd_x == 0 | is.na(sd_x)] <- 1.0
-    x_mat_std <- scale(x_mat, center = mu_x, scale = sd_x)
-  } else {
-    mu_x <- numeric(0)
-    sd_x <- numeric(0)
-    x_mat_std <- x_mat
-  }
-  
+  mu_x <- apply(x_mat, 2, mean, na.rm = TRUE)
+  sd_x <- apply(x_mat, 2, sd, na.rm = TRUE)
+  sd_x[sd_x == 0 | is.na(sd_x)] <- 1.0
+  x_mat_std <- scale(x_mat, center = mu_x, scale = sd_x)
   scale_vec <- c(1.0, sd_v, sd_x)
   
   # Set up directional projection vectors
@@ -109,7 +98,7 @@ mmd_dro <- function(formula, data, v0_col, v1_col,
     delta <- if (scale_type == "absolute") Inf else 1.0
   }
   
-  # --- 1c. L2 DRO Loss Function (For Binomial/Logit) ---
+  # --- 1c. Vectorized L2 DRO Loss Function (For Binomial/Logit) ---
   Q_dro_R <- function(par_std, v0_s, v1_max_s, x_s, y_val, d_val) {
     g0 <- par_std[1]
     gV <- par_std[2]
@@ -135,11 +124,9 @@ mmd_dro <- function(formula, data, v0_col, v1_col,
     # ==========================================================================
     if (family == "gaussian") {
       # Decision variables: x = (theta_pos [p], theta_neg [p], t [n])
-      # Objective: Minimize sum(t_i)/n
       obj_coeff <- c(rep(0, 2*p), rep(1/n, n))
       
       # Construct LP Constraint Matrix (4n x (2p+n))
-      # A_new = [A_theta, -A_theta, A_t]
       A_theta <- matrix(0, nrow = 4*n, ncol = p)
       unobs <- v1_max - v0
       v1_act <- if (scale_type == "absolute") v0 + pmin(unobs, d_val) else v0 + d_val * unobs
@@ -164,7 +151,7 @@ mmd_dro <- function(formula, data, v0_col, v1_col,
       rhs[seq(3, 4*n, 4)] <- y_val
       rhs[seq(4, 4*n, 4)] <- -y_val
       
-      # Solve Global Minimum
+      # Solve Global Minimum (PATCHED: Removed unconst.cols)
       opt_min <- lpSolve::lp("min", obj_coeff, A_full, ">=", rhs)
       Q_min <- opt_min$objval
       theta_hat_std <- opt_min$solution[1:p] - opt_min$solution[(p+1):(2*p)]
@@ -176,13 +163,12 @@ mmd_dro <- function(formula, data, v0_col, v1_col,
       
       if (method == "projection") {
         # --- PROJECTION METHOD ---
-        # Based on Kallus and Zhou (2018)
         A_proj <- rbind(A_full, c(rep(0, 2*p), rep(1, n)))
         rhs_proj <- c(rhs, tau_ID * n)
         dir_proj <- c(rep(">=", 4*n), "<=")
         
         for (k in 1:p) {
-          # Objective coefficient vector for projection
+          # Objective coefficient vector for projection (PATCHED: Removed unconst.cols)
           c_proj <- c(c_proj_list[[k]], -c_proj_list[[k]], rep(0, n))
           
           opt_L <- lpSolve::lp("min", c_proj, A_proj, dir_proj, rhs_proj)
@@ -193,13 +179,11 @@ mmd_dro <- function(formula, data, v0_col, v1_col,
         }
       } else {
         # --- PROFILE METHOD ---
-        # Based on Bugni, Canay, and Shi (2017)
         theta_hat_raw <- numeric(p)
         theta_hat_raw[2] <- theta_hat_std[2] / sd_v
         if(d > 0) theta_hat_raw[3:p] <- theta_hat_std[3:p] / sd_x
         theta_hat_raw[1] <- theta_hat_std[1] - (theta_hat_raw[2] * mu_v) - sum(theta_hat_raw[3:p] * mu_x)
         
-        # Row 1 is the threshold constraint. Row 2 is the parameter equality.
         A_prof <- rbind(A_full, c(rep(0, 2*p), rep(1, n)), rep(0, 2*p + n)) 
         dir_prof <- c(rep(">=", 4*n), "<=", "=")
         
@@ -208,7 +192,7 @@ mmd_dro <- function(formula, data, v0_col, v1_col,
           grid_k <- seq(theta_hat_raw[k] - radius_raw, theta_hat_raw[k] + radius_raw, length.out = grid_points)
           valid_pts <- c()
           
-          # Constraint row: c_proj * x = g
+          # Constraint row (PATCHED: Removed unconst.cols)
           A_prof[4*n + 2, ] <- c(c_proj_list[[k]], -c_proj_list[[k]], rep(0, n))
           
           for (g in grid_k) {
