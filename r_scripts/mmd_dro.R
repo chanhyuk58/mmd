@@ -72,10 +72,16 @@ mmd_dro <- function(formula, data, v0_col, v1_col,
   v0_std <- (v0 - mu_v) / sd_v
   v1_max_std <- (v1_max - mu_v) / sd_v
   
-  mu_x <- apply(x_mat, 2, mean, na.rm = TRUE)
-  sd_x <- apply(x_mat, 2, sd, na.rm = TRUE)
-  sd_x[sd_x == 0 | is.na(sd_x)] <- 1.0
-  x_mat_std <- scale(x_mat, center = mu_x, scale = sd_x)
+  if (d > 0) {
+    mu_x <- colMeans(x_mat, na.rm = TRUE)
+    sd_x <- sapply(as.data.frame(x_mat), sd, na.rm = TRUE)
+    sd_x[sd_x == 0 | is.na(sd_x)] <- 1.0
+    x_mat_std <- scale(x_mat, center = mu_x, scale = sd_x)
+  } else {
+    mu_x <- numeric(0)
+    sd_x <- numeric(0)
+    x_mat_std <- x_mat
+  }
   scale_vec <- c(1.0, sd_v, sd_x)
   
   # Set up directional projection vectors
@@ -124,7 +130,8 @@ mmd_dro <- function(formula, data, v0_col, v1_col,
     # ==========================================================================
     if (family == "gaussian") {
       # Decision variables: x = (theta_pos [p], theta_neg [p], t [n])
-      obj_coeff <- c(rep(0, 2*p), rep(1/n, n))
+      # Objective: Minimize sum(t_i)/n + 1e-6 * sum(theta_pos + theta_neg)
+      obj_coeff <- c(rep(1e-6, 2*p), rep(1/n, n))
       
       # Construct LP Constraint Matrix (4n x (2p+n))
       A_theta <- matrix(0, nrow = 4*n, ncol = p)
@@ -151,8 +158,11 @@ mmd_dro <- function(formula, data, v0_col, v1_col,
       rhs[seq(3, 4*n, 4)] <- y_val
       rhs[seq(4, 4*n, 4)] <- -y_val
       
-      # Solve Global Minimum (PATCHED: Removed unconst.cols)
-      opt_min <- lpSolve::lp("min", obj_coeff, A_full, ">=", rhs)
+      # All 4n constraints are strictly ">=" in the epigraph formulation
+      const_dir <- rep(">=", 4*n)
+      
+      # Solve Global Minimum
+      opt_min <- lpSolve::lp("min", obj_coeff, A_full, const_dir, rhs)
       Q_min <- opt_min$objval
       theta_hat_std <- opt_min$solution[1:p] - opt_min$solution[(p+1):(2*p)]
       
@@ -165,10 +175,9 @@ mmd_dro <- function(formula, data, v0_col, v1_col,
         # --- PROJECTION METHOD ---
         A_proj <- rbind(A_full, c(rep(0, 2*p), rep(1, n)))
         rhs_proj <- c(rhs, tau_ID * n)
-        dir_proj <- c(rep(">=", 4*n), "<=")
+        dir_proj <- c(const_dir, "<=")
         
         for (k in 1:p) {
-          # Objective coefficient vector for projection (PATCHED: Removed unconst.cols)
           c_proj <- c(c_proj_list[[k]], -c_proj_list[[k]], rep(0, n))
           
           opt_L <- lpSolve::lp("min", c_proj, A_proj, dir_proj, rhs_proj)
@@ -184,15 +193,15 @@ mmd_dro <- function(formula, data, v0_col, v1_col,
         if(d > 0) theta_hat_raw[3:p] <- theta_hat_std[3:p] / sd_x
         theta_hat_raw[1] <- theta_hat_std[1] - (theta_hat_raw[2] * mu_v) - sum(theta_hat_raw[3:p] * mu_x)
         
+        # Row 1 is the threshold constraint. Row 2 is the parameter equality.
         A_prof <- rbind(A_full, c(rep(0, 2*p), rep(1, n)), rep(0, 2*p + n)) 
-        dir_prof <- c(rep(">=", 4*n), "<=", "=")
+        dir_prof <- c(const_dir, "<=", "=")
         
         for (k in 1:p) {
           radius_raw <- grid_radius / scale_vec[k]
           grid_k <- seq(theta_hat_raw[k] - radius_raw, theta_hat_raw[k] + radius_raw, length.out = grid_points)
           valid_pts <- c()
           
-          # Constraint row (PATCHED: Removed unconst.cols)
           A_prof[4*n + 2, ] <- c(c_proj_list[[k]], -c_proj_list[[k]], rep(0, n))
           
           for (g in grid_k) {
@@ -253,7 +262,7 @@ mmd_dro <- function(formula, data, v0_col, v1_col,
       
       for (d_idx in seq_along(delta)) {
         fit_b <- solve_dro_bounds(v0_s_b, v1_s_b, x_s_b, y_b, delta[d_idx])
-        boot_bounds[, , b, d_idx] <- fit_b$bounds
+        boot_bounds[, , b, d_idx] = fit_b$bounds
       }
     }
     
@@ -271,6 +280,7 @@ mmd_dro <- function(formula, data, v0_col, v1_col,
   class(res) <- "mmd_results"
   return(res)
 }
+
 
 # ------------------------------------------------------------------------------
 # S3 Print and Summary Methods
