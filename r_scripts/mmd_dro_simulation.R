@@ -42,7 +42,6 @@ results_list <- foreach(i = 1:mc_reps,
 
   # Generate Toy Baseline Population (Continuous Y, Interval-Censored V)
   pop <- gen_pop_simple(n = 1000)
-  colnames(pop) <- c("y", "x", "v0", "v1")
   
   # True Parameters from Manski and Tamer
   true_params <- c("(Intercept)" = 1, "x" = -1, "latent_v0" = 1)
