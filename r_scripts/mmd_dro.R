@@ -172,8 +172,8 @@ mmd_dro <- function(formula, data, v0_col, v1_col,
       
       for (k in 1:p) {
         radius_raw <- grid_radius / scale_vec[k]
-        grid_k <- seq(theta_hat_raw[k] - radius_raw, theta_hat_raw[k] + radius_raw, length.out = grid_points)
-        valid_pts <- c()
+        grid_right <- seq(theta_hat_raw[k], theta_hat_raw[k] + radius_raw, length.out = grid_points)
+        grid_left  <- seq(theta_hat_raw[k], theta_hat_raw[k] - radius_raw, length.out = grid_points)
         
         eval_prof <- function(other_params_std, v_raw) {
           v_std <- v_raw * scale_vec[k]
@@ -183,17 +183,22 @@ mmd_dro <- function(formula, data, v0_col, v1_col,
           return(obj_fun_R(full_par_std))
         }
         
-        # Center-Out Sweep
         q_prof_right <- numeric(grid_points); q_prof_left  <- numeric(grid_points)
+        
+        # Sweep Right (Forwarding grid_right[i] directly through nloptr)
         current_guess <- theta_hat_std[-k]
         for(i in 1:grid_points) {
-          opt <- nloptr(x0 = current_guess, eval_f = function(x) eval_prof(x, grid_right[i]), opts = local_opts)
-          q_prof_right[i] <- opt$objective; current_guess <- opt$solution
+          opt <- nloptr(x0 = current_guess, eval_f = eval_prof, v_raw = grid_right[i], opts = local_opts)
+          q_prof_right[i] <- opt$objective
+          current_guess <- opt$solution
         }
+        
+        # Sweep Left (Forwarding grid_left[i] directly through nloptr)
         current_guess <- theta_hat_std[-k]
         for(i in 1:grid_points) {
-          opt <- nloptr(x0 = current_guess, eval_f = function(x) eval_prof(x, grid_left[i]), opts = local_opts)
-          q_prof_left[i] <- opt$objective; current_guess <- opt$solution
+          opt <- nloptr(x0 = current_guess, eval_f = eval_prof, v_raw = grid_left[i], opts = local_opts)
+          q_prof_left[i] <- opt$objective
+          current_guess <- opt$solution
         }
         
         full_grid_k <- c(rev(grid_left), grid_right[-1])
@@ -203,7 +208,6 @@ mmd_dro <- function(formula, data, v0_col, v1_col,
         bounds[k, 1] <- if (length(valid_ID) > 0) min(valid_ID) else NA
         bounds[k, 2] <- if (length(valid_ID) > 0) max(valid_ID) else NA
       }
-    }
     
     # Convert point estimate back to raw scale
     theta_hat_raw <- numeric(p)
