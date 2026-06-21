@@ -1,4 +1,3 @@
-library(lpSolve)
 library(nloptr)
 library(stats)
 library(graphics)
@@ -104,7 +103,7 @@ mmd_dro <- function(formula, data, v0_col, v1_col,
     delta <- if (scale_type == "absolute") Inf else 1.0
   }
   
-  # --- 1c. Vectorized L2 DRO Loss Function (For Binomial/Logit) ---
+  # --- 1c. Vectorized L2 DRO Loss Function (High Speed) ---
   Q_dro_R <- function(par_std, v0_s, v1_max_s, x_s, y_val, d_val) {
     g0 <- par_std[1]
     gV <- par_std[2]
@@ -125,112 +124,95 @@ mmd_dro <- function(formula, data, v0_col, v1_col,
   # --- 2. Core Estimation Solver ---
   solve_dro_bounds <- function(v0_s, v1_s, x_s, y_val, d_val) {
     
-    # ==========================================================================
-    # --- GAUSSIAN FAMILY (LINEAR PROGRAMMING) ---
-    # ==========================================================================
-    if (family == "gaussian") {
-      # Decision variables: x = (theta_pos [p], theta_neg [p], t [n])
-      # Objective: Minimize sum(t_i)/n + 1e-6 * sum(theta_pos + theta_neg)
-      obj_coeff <- c(rep(1e-6, 2*p), rep(1/n, n))
-      
-      # Construct LP Constraint Matrix (4n x (2p+n))
-      A_theta <- matrix(0, nrow = 4*n, ncol = p)
-      unobs <- v1_max - v0
-      v1_act <- if (scale_type == "absolute") v0 + pmin(unobs, d_val) else v0 + d_val * unobs
-      v1_act_s <- (v1_act - mu_v) / sd_v
-      
-      Z0 <- cbind(1, v0_s, x_s)
-      Z1 <- cbind(1, v1_act_s, x_s)
-      
-      A_theta[seq(1, 4*n, 4), ] <- Z0
-      A_theta[seq(2, 4*n, 4), ] <- -Z0
-      A_theta[seq(3, 4*n, 4), ] <- Z1
-      A_theta[seq(4, 4*n, 4), ] <- -Z1
-      
-      A_t <- matrix(0, nrow = 4*n, ncol = n)
-      A_t[matrix(c(1:(4*n), rep(1:n, each = 4)), ncol = 2)] <- 1
-      
-      A_full <- cbind(A_theta, -A_theta, A_t)
-      
-      rhs <- numeric(4*n)
-      rhs[seq(1, 4*n, 4)] <- y_val
-      rhs[seq(2, 4*n, 4)] <- -y_val
-      rhs[seq(3, 4*n, 4)] <- y_val
-      rhs[seq(4, 4*n, 4)] <- -y_val
-      
-      # All 4n constraints are strictly ">=" in the epigraph formulation
-      const_dir <- rep(">=", 4*n)
-      
-      # Solve Global Minimum
-      opt_min <- lpSolve::lp("min", obj_coeff, A_full, const_dir, rhs)
-      Q_min <- opt_min$objval
-      theta_hat_std <- opt_min$solution[1:p] - opt_min$solution[(p+1):(2*p)]
-      
-      # Calculate Threshold
-      tau_ID <- Q_min + (log(n) / n)
-      
-      bounds <- matrix(NA, p, 2, dimnames = list(param_names, c("Lower", "Upper")))
-      
-      if (method == "projection") {
-        # --- PROJECTION METHOD ---
-        A_proj <- rbind(A_full, c(rep(0, 2*p), rep(1, n)))
-        rhs_proj <- c(rhs, tau_ID * n)
-        dir_proj <- c(const_dir, "<=")
-        
-        for (k in 1:p) {
-          c_proj <- c(c_proj_list[[k]], -c_proj_list[[k]], rep(0, n))
-          
-          opt_L <- lpSolve::lp("min", c_proj, A_proj, dir_proj, rhs_proj)
-          bounds[k, 1] <- if (opt_L$status == 0) opt_L$objval else NA
-          
-          opt_U <- lpSolve::lp("max", c_proj, A_proj, dir_proj, rhs_proj)
-          bounds[k, 2] <- if (opt_U$status == 0) opt_U$objval else NA
-        }
-      } else {
-        # --- PROFILE METHOD ---
-        theta_hat_raw <- numeric(p)
-        theta_hat_raw[2] <- theta_hat_std[2] / sd_v
-        if(d > 0) theta_hat_raw[3:p] <- theta_hat_std[3:p] / sd_x
-        theta_hat_raw[1] <- theta_hat_std[1] - (theta_hat_raw[2] * mu_v) - sum(theta_hat_raw[3:p] * mu_x)
-        
-        # Row 1 is the threshold constraint. Row 2 is the parameter equality.
-        A_prof <- rbind(A_full, c(rep(0, 2*p), rep(1, n)), rep(0, 2*p + n)) 
-        dir_prof <- c(const_dir, "<=", "=")
-        
-        for (k in 1:p) {
-          radius_raw <- grid_radius / scale_vec[k]
-          grid_k <- seq(theta_hat_raw[k] - radius_raw, theta_hat_raw[k] + radius_raw, length.out = grid_points)
-          valid_pts <- c()
-          
-          A_prof[4*n + 2, ] <- c(c_proj_list[[k]], -c_proj_list[[k]], rep(0, n))
-          
-          for (g in grid_k) {
-            rhs_prof <- c(rhs, tau_ID * n, g)
-            opt_prof <- lpSolve::lp("min", obj_coeff, A_prof, dir_prof, rhs_prof)
-            if (opt_prof$status == 0) valid_pts <- c(valid_pts, g)
-          }
-          
-          bounds[k, 1] <- if (length(valid_pts) > 0) min(valid_pts) else NA
-          bounds[k, 2] <- if (length(valid_pts) > 0) max(valid_pts) else NA
-        }
+    obj_fun_R <- function(par) Q_dro_R(par, v0_s, v1_s, x_s, y_val, d_val)
+    
+    # A. Global Minimum (Multi-Start BOBYQA)
+    opts_unconstr <- list("algorithm" = "NLOPT_LN_BOBYQA", "xtol_rel" = 1e-7, "maxeval" = 10000)
+    best_Q <- Inf; theta_hat_std <- rep(0, p)
+    
+    for(i in 1:n_starts) {
+      start_val <- if(i == 1) rep(0, p) else rnorm(p, 0, 0.5)
+      opt <- nloptr(x0 = start_val, eval_f = obj_fun_R, opts = opts_unconstr)
+      if(opt$objective < best_Q) {
+        best_Q <- opt$objective
+        theta_hat_std <- opt$solution
       }
-      
-      # Convert point estimate back to raw scale
+    }
+    Q_min <- best_Q
+    tau_ID <- Q_min + (log(length(y_val)) / length(y_val))
+    
+    bounds <- matrix(NA, p, 2, dimnames = list(param_names, c("Lower", "Upper")))
+    
+    # B. Projections (AUGLAG + BOBYQA on the Primal)
+    local_opts <- list("algorithm" = "NLOPT_LN_BOBYQA", "xtol_rel" = 1e-5)
+    opts_proj <- list("algorithm" = "NLOPT_LN_AUGLAG", "local_opts" = local_opts, 
+                      "xtol_rel" = 1e-5, "maxeval" = 5000)
+    
+    lb <- rep(-param_bounds, p); ub <- rep(param_bounds, p)
+    
+    run_proj <- function(obj_dir, tau) {
+      opt <- nloptr(theta_hat_std, eval_f = obj_dir, eval_g_ineq = function(x) obj_fun_R(x)-tau, lb=lb, ub=ub, opts=opts_proj)
+      if (obj_fun_R(opt$solution) > tau + 1e-4) return(NA) # Feasibility check
+      return(opt$objective)
+    }
+    
+    if (method == "projection") {
+      # --- PROJECTION METHOD ---
+      for (k in 1:p) {
+        eval_dir <- function(x) sum(x * c_proj_list[[k]])
+        bounds[k, 1] <- run_proj(eval_dir, tau_ID)
+        bounds[k, 2] <- -run_proj(function(x) -eval_dir(x), tau_ID)
+      }
+    } else {
+      # --- PROFILE METHOD ---
       theta_hat_raw <- numeric(p)
       theta_hat_raw[2] <- theta_hat_std[2] / sd_v
       if(d > 0) theta_hat_raw[3:p] <- theta_hat_std[3:p] / sd_x
       theta_hat_raw[1] <- theta_hat_std[1] - (theta_hat_raw[2] * mu_v) - sum(theta_hat_raw[3:p] * mu_x)
-      names(theta_hat_raw) <- param_names
       
-      return(list(bounds = bounds, theta_raw = theta_hat_raw, Q_min = Q_min, tau_ID = tau_ID))
+      for (k in 1:p) {
+        radius_raw <- grid_radius / scale_vec[k]
+        grid_k <- seq(theta_hat_raw[k] - radius_raw, theta_hat_raw[k] + radius_raw, length.out = grid_points)
+        valid_pts <- c()
+        
+        eval_prof <- function(other_params_std, v_raw) {
+          v_std <- v_raw * scale_vec[k]
+          full_par_std <- numeric(p)
+          full_par_std[-k] <- other_params_std
+          full_par_std[k] <- v_std
+          return(obj_fun_R(full_par_std))
+        }
+        
+        # Center-Out Sweep
+        q_prof_right <- numeric(grid_points); q_prof_left  <- numeric(grid_points)
+        current_guess <- theta_hat_std[-k]
+        for(i in 1:grid_points) {
+          opt <- nloptr(x0 = current_guess, eval_f = function(x) eval_prof(x, grid_right[i]), opts = local_opts)
+          q_prof_right[i] <- opt$objective; current_guess <- opt$solution
+        }
+        current_guess <- theta_hat_std[-k]
+        for(i in 1:grid_points) {
+          opt <- nloptr(x0 = current_guess, eval_f = function(x) eval_prof(x, grid_left[i]), opts = local_opts)
+          q_prof_left[i] <- opt$objective; current_guess <- opt$solution
+        }
+        
+        full_grid_k <- c(rev(grid_left), grid_right[-1])
+        full_q_prof <- c(rev(q_prof_left), q_prof_right[-1])
+        
+        valid_ID <- full_grid_k[full_q_prof <= tau_ID]
+        bounds[k, 1] <- if (length(valid_ID) > 0) min(valid_ID) else NA
+        bounds[k, 2] <- if (length(valid_ID) > 0) max(valid_ID) else NA
+      }
     }
     
-    # ==========================================================================
-    # --- BINOMIAL FAMILY (NON-LINEAR PROGRAMMING) ---
-    # ==========================================================================
-    if (family == "binomial") {
-      # Non-linear optimizer logic placeholder
-    }
+    # Convert point estimate back to raw scale
+    theta_hat_raw <- numeric(p)
+    theta_hat_raw[2] <- theta_hat_std[2] / sd_v
+    if(d > 0) theta_hat_raw[3:p] <- theta_hat_std[3:p] / sd_x
+    theta_hat_raw[1] <- theta_hat_std[1] - (theta_hat_raw[2] * mu_v) - sum(theta_hat_raw[3:p] * mu_x)
+    names(theta_hat_raw) <- param_names
+    
+    return(list(bounds = bounds, theta_raw = theta_hat_raw, Q_min = Q_min, tau_ID = tau_ID))
   }
   
   # --- 3. Estimation over Delta ---
@@ -262,7 +244,7 @@ mmd_dro <- function(formula, data, v0_col, v1_col,
       
       for (d_idx in seq_along(delta)) {
         fit_b <- solve_dro_bounds(v0_s_b, v1_s_b, x_s_b, y_b, delta[d_idx])
-        boot_bounds[, , b, d_idx] = fit_b$bounds
+        boot_bounds[, , b, d_idx] <- fit_b$bounds
       }
     }
     
