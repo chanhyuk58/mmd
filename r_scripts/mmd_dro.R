@@ -208,6 +208,7 @@ mmd_dro <- function(formula, data, v0_col, v1_col,
         bounds[k, 1] <- if (length(valid_ID) > 0) min(valid_ID) else NA
         bounds[k, 2] <- if (length(valid_ID) > 0) max(valid_ID) else NA
       }
+    }
     
     # Convert point estimate back to raw scale
     theta_hat_raw <- numeric(p)
