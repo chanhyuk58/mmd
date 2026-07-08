@@ -41,10 +41,23 @@ results_list <- foreach(i = 1:mc_reps,
   source("./mmd_dro.R")
 
   # Generate Toy Baseline Population (Continuous Y, Interval-Censored V)
-  pop <- gen_pop_simple(n = 1000)
+  # pop <- gen_pop_simple(n = 1000)
+  pop <- gen_pop()
   
   # True Parameters from Manski and Tamer
   true_params <- c("(Intercept)" = 1, "x" = -1, "latent_v0" = 1)
+  true_params <- c(  
+    "beta_0" = 0.11,
+    "beta_gdp" = -0.05,
+    "beta_democ" = -0.02,
+    "beta_eth" = 0.02,
+    "beta_pop" = 0.03,
+    "beta_ref" = 0.01,
+    "beta_v" = -0.003,
+    "mean_gdp" = 8.5,
+    "mean_pop" = 16.0,
+    "gdp_shock" = 0.05
+  )
 
   # Estimation A: Direct LP Projection (Exact & Global)
   fit_proj <- mmd_dro(
