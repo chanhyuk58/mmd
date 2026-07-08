@@ -42,33 +42,25 @@ results_list <- foreach(i = 1:mc_reps,
 
   # Generate Toy Baseline Population (Continuous Y, Interval-Censored V)
   # pop <- gen_pop_simple(n = 1000)
-  pop <- gen_pop()
+  sim <- gen_pop()
+  pop <- sim$data
   
   # True Parameters from Manski and Tamer
-  true_params <- c("(Intercept)" = 1, "x" = -1, "latent_v0" = 1)
-  true_params <- c(  
-    "beta_0" = 0.11,
-    "beta_gdp" = -0.05,
-    "beta_democ" = -0.02,
-    "beta_eth" = 0.02,
-    "beta_pop" = 0.03,
-    "beta_ref" = 0.01,
-    "beta_v" = -0.003,
-    "mean_gdp" = 8.5,
-    "mean_pop" = 16.0,
-    "gdp_shock" = 0.05
-  )
+  # true_params <- c("(Intercept)" = 1, "x" = -1, "latent_v0" = 1)
+  true_params <- sim$true_params
 
   # Estimation A: Direct LP Projection (Exact & Global)
   fit_proj <- mmd_dro(
-    y ~ x, data = pop, v0_col = "v0", v1_col = "v1",
+    onset ~ log_gdp + democ + eth_het + log_pop + log_ref, 
+    data = pop, v0_col = "v0", v1_col = "v1",
     family = "gaussian", method = "projection",
     delta = Inf, B = 0, verbose = FALSE
   )
 
   # Estimation B: LP-Profile Grid (Centered on Global Min)
   fit_prof <- mmd_dro(
-    y ~ x, data = pop, v0_col = "v0", v1_col = "v1",
+    onset ~ log_gdp + democ + eth_het + log_pop + log_ref, 
+    data = pop, v0_col = "v0", v1_col = "v1",
     family = "gaussian", method = "profile",
     delta = Inf, B = 0,
     grid_radius = 0.5, grid_points = 100,
