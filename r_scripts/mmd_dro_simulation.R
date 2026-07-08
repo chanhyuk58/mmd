@@ -22,7 +22,7 @@ n_cores <- if (lsb_hosts != "") {
 
 registerDoFuture()
 plan(multisession, workers = n_cores)
-cat(sprintf(">> Registered %d local socket workers (No SSH or compiler needed).\n", n_cores))
+cat(sprintf(">> Registered %d local socket workers\n", n_cores))
 
 # --- 2. Monte Carlo Parameters ---
 mc_reps <- 100
@@ -110,4 +110,4 @@ summary_stats <- all_results %>%
 print(summary_stats)
 
 # Save
-save(all_results, summary_stats, file = paste0("mc_final_simple_", Sys.Date(), ".rda"))
+save(all_results, summary_stats, file = paste0("mc_final_civilwar_", Sys.Date(), ".rda"))
