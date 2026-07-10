@@ -38,7 +38,7 @@ mmd_dro <- function(formula, data, v0_col, v1_col,
   scale_type <- match.arg(scale)
   cl <- match.call()
   
-  # --- 1. Data Preparation (NA-Safe) ---
+  # --- 1. Data Preparation (NA-Safe & Tibble-Safe) ---
   if(verbose) cat(">> [1/5] Preparing and validating data...\n")
   fml_full <- update(formula, paste("~ . +", v0_col, "+", v1_col))
   mf <- model.frame(fml_full, data)
@@ -57,6 +57,7 @@ mmd_dro <- function(formula, data, v0_col, v1_col,
   p <- length(param_names)
   
   # --- 1b. INVISIBLE PURE STANDARDIZATION ---
+  # SD is calculated over the full v0 sample to prevent selection bias
   uncensored_v0 <- v0[v1_max == v0]
   
   if (length(uncensored_v0) > 1 && !is.na(sd(uncensored_v0, na.rm = TRUE)) && sd(uncensored_v0, na.rm = TRUE) > 0) {
@@ -83,7 +84,7 @@ mmd_dro <- function(formula, data, v0_col, v1_col,
   }
   scale_vec <- c(1.0, sd_v, sd_x)
   
-  # Set up directional projection vectors
+  # Set up directional projection vectors (ROI/KMS style)
   c_proj_list <- lapply(1:p, function(k) {
     c_proj <- rep(0, p)
     if (k == 1) {
@@ -109,13 +110,18 @@ mmd_dro <- function(formula, data, v0_col, v1_col,
     gV <- par_std[2]
     fx <- if (ncol(x_s) > 0) as.numeric(x_s %*% par_std[3:length(par_std)]) else 0
     
-    unobs <- v1_max - v0
-    v1_act <- if (scale_type == "absolute") v0 + pmin(unobs, d_val) else v0 + d_val * unobs
+    # Self-contained reconstruction of raw values to prevent parallel environment errors
+    v0_raw <- v0_s * sd_v + mu_v
+    v1_max_raw <- v1_max_s * sd_v + mu_v
+    unobs <- v1_max_raw - v0_raw
+    
+    v1_act <- if (scale_type == "absolute") v0_raw + pmin(unobs, d_val) else v0_raw + d_val * unobs
     v1_act_s <- (v1_act - mu_v) / sd_v
     
     f0 <- g0 + gV * v0_s + fx
     f1 <- g0 + gV * v1_act_s + fx
     
+    # L2 Squared Errors (Mean Regression)
     L0 <- (y_val - f0)^2
     L1 <- (y_val - f1)^2
     return(sum(pmax(L0, L1)) / length(y_val))
@@ -185,20 +191,18 @@ mmd_dro <- function(formula, data, v0_col, v1_col,
         
         q_prof_right <- numeric(grid_points); q_prof_left  <- numeric(grid_points)
         
-        # Sweep Right (Forwarding grid_right[i] directly through nloptr)
+        # Sweep Right
         current_guess <- theta_hat_std[-k]
         for(i in 1:grid_points) {
           opt <- nloptr(x0 = current_guess, eval_f = eval_prof, v_raw = grid_right[i], opts = local_opts)
-          q_prof_right[i] <- opt$objective
-          current_guess <- opt$solution
+          q_prof_right[i] <- opt$objective; current_guess <- opt$solution
         }
         
-        # Sweep Left (Forwarding grid_left[i] directly through nloptr)
+        # Sweep Left
         current_guess <- theta_hat_std[-k]
         for(i in 1:grid_points) {
           opt <- nloptr(x0 = current_guess, eval_f = eval_prof, v_raw = grid_left[i], opts = local_opts)
-          q_prof_left[i] <- opt$objective
-          current_guess <- opt$solution
+          q_prof_left[i] <- opt$objective; current_guess <- opt$solution
         }
         
         full_grid_k <- c(rev(grid_left), grid_right[-1])
@@ -274,7 +278,7 @@ mmd_dro <- function(formula, data, v0_col, v1_col,
 # ------------------------------------------------------------------------------
 
 print.mmd_results <- function(x, ...) {
-  cat("\nMMD-DRO Robust Estimator (Linear Programming)\n")
+  cat("\nMMD-DRO Robust Estimator (L2 Primal Optimization)\n")
   cat("--------------------------------------------\n")
   cat("Scale Type:  ", x$scale, "\n")
   cat("Sample Size: ", x$n, "\n\n")
@@ -290,6 +294,7 @@ summary.mmd_results <- function(object, ...) {
     df <- res$bounds_ID
     df$Parameter <- rownames(df)
     df$Delta <- res$delta
+    df$Point_Est <- res$point_est
     if (!is.null(res$bounds_CI)) {
       df$CI_Lower <- res$bounds_CI$Lower
       df$CI_Upper <- res$bounds_CI$Upper
@@ -316,9 +321,9 @@ print.summary.mmd_results <- function(x, ...) {
   cat("=================================================================\n")
   cat("Scale: ", x$scale, " | n: ", x$n, "\n\n")
   if (x$B > 0) {
-    print(round(x$table[, c("Parameter", "Delta", "Lower", "Upper", "CI_Lower", "CI_Upper")], 4))
+    print(round(x$table[, c("Parameter", "Delta", "Point_Est", "Lower", "Upper", "CI_Lower", "CI_Upper")], 4))
   } else {
-    print(round(x$table[, c("Parameter", "Delta", "Lower", "Upper")], 4))
+    print(round(x$table[, c("Parameter", "Delta", "Point_Est", "Lower", "Upper")], 4))
   }
   cat("=================================================================\n\n")
 }
