@@ -2,8 +2,7 @@ library(Rcpp)
 library(nloptr)     
 library(splines)
 library(stats)
-# library(np)         
-  
+library(ranger)
 
 if(file.exists("mmd_cpp.cpp")) {
   Rcpp::sourceCpp("mmd_cpp.cpp", cacheDir = tempdir())
@@ -13,7 +12,7 @@ if(file.exists("mmd_cpp.cpp")) {
 
 MMD_bounds <- function(formula, data, v0_col, v1_col,
                        method = c("projection", "profile"),
-                       grid_radius = 0.5,    # Radius in standardized space
+                       grid_radius = 0.5,
                        grid_points = 100,    
                        alpha = 0.05,
                        B = 200, 
@@ -21,10 +20,16 @@ MMD_bounds <- function(formula, data, v0_col, v1_col,
                        n_starts = 5,         
                        param_bounds = 20,    
                        K_folds = 5,          
-                       strict_bw = FALSE,    # CV for npreg Bandwidth setting
+                       eta_method = c("ranger", "np"),
+                       use_full_bw = TRUE,   # Toggle: estimate BW once on replication population
+                       eta_oracle = NULL,    # Input for analytical/oracle eta
+                       family = c("lpm", "logit"),
                        verbose = TRUE) {
   
   method <- match.arg(method)
+  eta_method <- match.arg(eta_method)
+  family <- match.arg(family)
+  family_code <- if(family == "lpm") 0 else 1
   cl <- match.call()
   
   # --- 1. Data Preparation ---
@@ -33,15 +38,11 @@ MMD_bounds <- function(formula, data, v0_col, v1_col,
   fml_full <- update(formula, paste("~ . +", v0_col, "+", v1_col))
   mf <- model.frame(fml_full, data)
   
-  # Extract Y
   y <- as.numeric(model.response(mf)) 
-  
-  # Extract X matrix
   full_x_mat <- model.matrix(formula, mf)
   intercept_idx <- which(colnames(full_x_mat) == "(Intercept)")
   x_mat <- if(length(intercept_idx) > 0) full_x_mat[, -intercept_idx, drop=FALSE] else full_x_mat
   
-  # Extract v0 and v1
   v0 <- as.numeric(mf[[v0_col]])
   v1 <- as.numeric(mf[[v1_col]])
   
@@ -65,65 +66,70 @@ MMD_bounds <- function(formula, data, v0_col, v1_col,
   x_mat_std <- scale(x_mat, center = mu_x, scale = sd_x)
   scale_vec <- c(1.0, sd_v, sd_x)
   
-  # --- 2. Nuisance Parameter (eta) via cross-fitting ---
-  # if(verbose) cat(sprintf(">> [2/5] Estimating eta via %d-Fold Cross-Fitting (ranger)...\n", K_folds))
-  #
-  # df_rf <- data.frame(yn = y, v0 = v0_std, v1 = v1_std)
-  # if (d > 0) df_rf <- cbind(df_rf, as.data.frame(x_mat_std))
-  #
-  # folds <- sample(rep(1:K_folds, length.out = n))
-  # eta <- numeric(n)
-  #
-  # for(k in 1:K_folds) {
-  #   train_df <- df_rf[folds != k, , drop = FALSE]
-  #   test_df  <- df_rf[folds == k, , drop = FALSE]
-  #
-  #   rf_k <- ranger::ranger(yn ~ ., data = train_df, num.trees = 500)
-  #   eta[folds == k] <- predict(rf_k, data = test_df)$predictions
-  # }
-  #
-  # eta <- pmin(pmax(eta, min(y)), max(y))
-
-  --- [COMMENTED OUT] Original kernel regression (np) ---
-  Replaced by ranger: np::npregbw is extremely slow with 7+ covariates
-  (curse of dimensionality), and bandwidth was estimated on the full
-  sample before cross-fitting, leaking information across folds.
-
-  df_np <- data.frame(yn = y, v0 = v0_std, v1 = v1_std)
-  if (d > 0) df_np <- cbind(df_np, as.data.frame(x_mat_std))
-    fml_np <- as.formula(paste("yn ~", paste(names(df_np)[-1], collapse = " + ")))
-
-    bw_obj <- np::npregbw(fml_np, data = df_np, regtype = "lc", bwmethod = "cv.aic")
-    raw_bws <- bw_obj$bw
-
-    folds <- sample(rep(1:K_folds, length.out = n))
-    eta <- numeric(n)
-
-    for(k in 1:K_folds) {
+  # --- 2. Nuisance Parameter (eta) ---
+  if (!is.null(eta_oracle)) {
+    if(verbose) cat(">> [2/5] Using supplied oracle eta...\n")
+    eta <- eta_oracle
+  } else {
+    if (eta_method == "ranger") {
+      if(verbose) cat(sprintf(">> [2/5] Estimating eta via %d-Fold Cross-Fitting (ranger)...\n", K_folds))
+      df_rf <- data.frame(yn = y, v0 = v0_std, v1 = v1_std)
+      if (d > 0) df_rf <- cbind(df_rf, as.data.frame(x_mat_std))
+      
+      folds <- sample(rep(1:K_folds, length.out = n))
+      eta <- numeric(n)
+      
+      for(k in 1:K_folds) {
+        train_df <- df_rf[folds != k, , drop = FALSE]
+        test_df  <- df_rf[folds == k, , drop = FALSE]
+        rf_k <- ranger::ranger(yn ~ ., data = train_df, num.trees = 500)
+        eta[folds == k] <- predict(rf_k, data = test_df)$predictions
+      }
+    } else {
+      if(verbose) cat(sprintf(">> [2/5] Estimating eta via %d-Fold Cross-Fitting (np)...\n", K_folds))
+      df_np <- data.frame(yn = y, v0 = v0_std, v1 = v1_std)
+      if (d > 0) df_np <- cbind(df_np, as.data.frame(x_mat_std))
+      fml_np <- as.formula(paste("yn ~", paste(names(df_np)[-1], collapse = " + ")))
+      
+      if (use_full_bw) {
+        if(verbose) cat("       Estimating full population bandwidth once...\n")
+        bw_obj <- np::npregbw(fml_np, data = df_np, regtype = "lc", bwmethod = "cv.aic")
+        raw_bws <- bw_obj$bw
+      }
+      
+      folds <- sample(rep(1:K_folds, length.out = n))
+      eta <- numeric(n)
+      
+      for(k in 1:K_folds) {
         train_df <- df_np[folds != k, , drop = FALSE]
         test_df  <- df_np[folds == k, , drop = FALSE]
-
-        mod_k <- np::npreg(bws = raw_bws,
-                              txdat = train_df[, -1, drop = FALSE],
-                              tydat = train_df[, 1],
-                              ckertype = "epa")
-
+        
+        bws_used <- if (use_full_bw) {
+          raw_bws
+        } else {
+          np::npregbw(fml_np, data = train_df, regtype = "lc", bwmethod = "cv.aic")$bw
+        }
+        
+        mod_k <- np::npreg(bws = bws_used,
+                           txdat = train_df[, -1, drop = FALSE],
+                           tydat = train_df[, 1],
+                           ckertype = "epa")
         eta[folds == k] <- as.numeric(predict(mod_k, newdata = test_df[, -1, drop = FALSE]))
+      }
     }
-
     eta <- pmin(pmax(eta, min(y)), max(y))
+  }
   
-  # --- 3. Sample Minimum (Multi-Start BOBYQA) ---
+  # --- 3. Sample Minimum ---
   if(verbose) cat(sprintf(">> [3/5] Finding global sample minimum (%d starts)...\n", n_starts))
 
-  # Pre-coerce once to avoid redundant copies on every optimizer call
   x_mat_std_m <- as.matrix(x_mat_std)
   v0_std_n <- as.numeric(v0_std)
   v1_std_n <- as.numeric(v1_std)
   eta_n <- as.numeric(eta)
 
   obj_fun_R <- function(par_std) {
-    Q_obj_cpp(x_mat_std_m, v0_std_n, v1_std_n, par_std, eta_n)
+    Q_obj_cpp(x_mat_std_m, v0_std_n, v1_std_n, par_std, eta_n, family = family_code)
   }
   
   opts_unconstr <- list("algorithm" = "NLOPT_LN_BOBYQA", "xtol_rel" = 1e-7, "maxeval" = 10000)
@@ -140,7 +146,6 @@ MMD_bounds <- function(formula, data, v0_col, v1_col,
   Q_min_hat <- best_Q
   if(verbose) cat(sprintf("       Global Sample Minimum (Q_min_hat) = %.6f\n", Q_min_hat))
   
-  # Calculate Raw Point Estimate
   theta_hat_raw <- numeric(p)
   theta_hat_raw[2] <- theta_hat_std[2] / sd_v
   if(d > 0) theta_hat_raw[3:p] <- theta_hat_std[3:p] / sd_x
@@ -148,7 +153,6 @@ MMD_bounds <- function(formula, data, v0_col, v1_col,
   names(theta_hat_raw) <- param_names
   
   # --- 4. Subsampling for CI ---
-  # Chernozhucov et al 2018
   tau_CI <- NA
   if (B > 0) {
     if(verbose) cat(">> [4/5] Subsampling for critical values...\n")
@@ -157,7 +161,7 @@ MMD_bounds <- function(formula, data, v0_col, v1_col,
     
     for(i in 1:B) {
       idx <- sample(0:(n-1), b_size, replace = FALSE)
-      sub_obj <- function(p_std) Q_obj_subsample_cpp(x_mat_std_m, v0_std_n, v1_std_n, p_std, eta_n, idx)
+      sub_obj <- function(p_std) Q_obj_subsample_cpp(x_mat_std_m, v0_std_n, v1_std_n, p_std, eta_n, idx, family = family_code)
       opt_sub <- nloptr(x0 = theta_hat_std, eval_f = sub_obj, opts = opts_sub)
       W_stats[i] <- b_size * (sub_obj(theta_hat_std) - opt_sub$objective)
     }
@@ -272,10 +276,6 @@ MMD_bounds <- function(formula, data, v0_col, v1_col,
   class(res) <- "mmd_results"
   return(res)
 }
-
-# ------------------------------------------------------------------------------
-# 3. S3 Methods
-# ------------------------------------------------------------------------------
 
 print.mmd_results <- function(x, ...) {
   cat("\nMMD Estimator (Method:", x$method, ")\n")

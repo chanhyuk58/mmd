@@ -8,15 +8,12 @@ library(ranger)
 
 cat("Packages loaded ...\n")
 
-# Set Up
 mc_reps <- 100
 
-# --- 1. Master Compilation ---
 cat(">> Master: Compiling C++ backend...\n")
 Rcpp::sourceCpp("./mmd_cpp.cpp", cacheDir = tempdir())
 cat(">> Master: Compilation complete.\n")
 
-# --- 2. Setup Cluster ---
 lsb_hosts <- Sys.getenv("LSB_HOSTS")
 n_cores <- if (lsb_hosts != "") {
   length(strsplit(lsb_hosts, " ")[[1]])
@@ -30,24 +27,20 @@ cat(sprintf(">> Registered %d workers.\n", n_cores))
 
 cat(">> Starting Monte Carlo...\n")
 
-# Monte Carlo Simulation
-
 set.seed(4875995)
 results_list <- foreach(i = 1:mc_reps,
                         .options.future = list(seed = TRUE),
                         .errorhandling = "stop") %dofuture% {
 
-  # Each worker compiles into its own tempdir (unique per multisession worker)
   Rcpp::sourceCpp("./mmd_cpp.cpp", cacheDir = tempdir())
   source("./mmd_cpp.R")
   source("./generate_pop.R")
 
-  # Generate Data
   sim <- gen_pop(
-    J = 100,
-    T_full = 100,
-    birth_range = c(1, 50),
-    obs_start_range = c(50, 90),
+    J = 80,
+    T_full = 80,
+    birth_range = c(1, 40),
+    obs_start_range = c(40, 70),
     mean_gdp = 8.5,
     mean_pop = 16.0,
     gdp_shock = 0.05
@@ -55,74 +48,73 @@ results_list <- foreach(i = 1:mc_reps,
   pop <- sim$data
   true_params <- sim$true_params
 
-  cat("Population Generated ...\n")
-
-  # Projection Method
-  fit_proj <- MMD_bounds(
+  # --- 1. Estimation with Cross-fitted Eta (ranger) ---
+  fit_estimated <- MMD_bounds(
     onset ~ log_gdp + democ + eth_het + log_pop + log_ref,
     data = pop, v0_col = "v0", v1_col = "v1",
     method = "projection",
     B = 0,
+    eta_method = "ranger",
+    family = "lpm",
     verbose = FALSE
   )
 
-  cat("Projection method is done ...\n")
-
-  # Profile Method
-  fit_prof <- MMD_bounds(
+  # --- 2. Estimation with Oracle (Analytical) Eta ---
+  fit_oracle <- MMD_bounds(
     onset ~ log_gdp + democ + eth_het + log_pop + log_ref,
     data = pop, v0_col = "v0", v1_col = "v1",
-    method = "profile",
-    grid_radius = 0.5,
-    grid_points = 100,
+    method = "projection",
     B = 0,
+    eta_oracle = pop$eta_oracle,
+    family = "lpm",
     verbose = FALSE
   )
 
-  cat("Profile method is done ...\n")
-
-  # Results
   rep_res <- data.frame(
     iteration = i,
     param     = names(true_params),
     truth     = as.numeric(true_params),
-    # Projection Results
-    proj_est  = fit_proj$point_est,
-    proj_low  = fit_proj$bounds_ID$Lower,
-    proj_upp  = fit_proj$bounds_ID$Upper,
-    # Profile Results
-    prof_low  = fit_prof$bounds_ID$Lower,
-    prof_upp  = fit_prof$bounds_ID$Upper
+    
+    est_point  = fit_estimated$point_est,
+    est_low    = fit_estimated$bounds_ID$Lower,
+    est_upp    = fit_estimated$bounds_ID$Upper,
+    
+    orc_point  = fit_oracle$point_est,
+    orc_low    = fit_oracle$bounds_ID$Lower,
+    orc_upp    = fit_oracle$bounds_ID$Upper
   )
 
-  # Coverage
   rep_res <- rep_res %>%
     mutate(
-      proj_covered = (truth >= proj_low & truth <= proj_upp),
-      prof_covered = (truth >= prof_low & truth <= prof_upp),
-      proj_width   = proj_upp - proj_low
+      est_covered = (truth >= est_low & truth <= est_upp),
+      orc_covered = (truth >= orc_low & truth <= orc_upp),
+      est_width   = est_upp - est_low,
+      orc_width   = orc_upp - orc_low
     )
 
   return(rep_res)
 }
 
-# MC results
 all_results <- bind_rows(results_list)
 
 summary_stats <- all_results %>%
   group_by(param) %>%
   summarize(
     True_Value    = first(truth),
-    Avg_Proj_Est  = mean(proj_est),
-    Avg_Proj_Low  = mean(proj_low),
-    Avg_Proj_Upp  = mean(proj_upp),
-    Proj_Coverage   = mean(proj_covered),
-    Avg_Prof_Low  = mean(prof_low),
-    Avg_Prof_Upp  = mean(prof_upp),
-    Prof_Coverage   = mean(prof_covered),
-    mc_reps = n()
+    Avg_Est_Point = mean(est_point, na.rm = TRUE),
+    Avg_Est_Low   = mean(est_low, na.rm = TRUE),
+    Avg_Est_Upp   = mean(est_upp, na.rm = TRUE),
+    Est_Coverage  = mean(est_covered, na.rm = TRUE),
+    Avg_Est_Width = mean(est_width, na.rm = TRUE),
+    
+    Avg_Orc_Point = mean(orc_point, na.rm = TRUE),
+    Avg_Orc_Low   = mean(orc_low, na.rm = TRUE),
+    Avg_Orc_Upp   = mean(orc_upp, na.rm = TRUE),
+    Orc_Coverage  = mean(orc_covered, na.rm = TRUE),
+    Avg_Orc_Width = mean(orc_width, na.rm = TRUE),
+    mc_reps       = n()
   )
 
 print(summary_stats)
 
-save(all_results, summary_stats, file = paste0("mc_final_", Sys.Date(), ".rda"))
+save(all_results, summary_stats, file = paste0("mc_comparison_", Sys.Date(), ".rda"))

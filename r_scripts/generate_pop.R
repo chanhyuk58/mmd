@@ -93,6 +93,78 @@ gen_pop <- function(
     }
   }
 
+  # --- Analytical Oracle Eta Calculation ---
+  eta_oracle_full <- numeric(N_total)
+
+  for(j in 1:J) {
+    b_yr <- birth_years_vec[j]
+    o_start <- country_meta$obs_start_year[j]
+    eth <- eth_het_vec[j]
+    
+    # State probability vector representing durations 0 to T_full
+    w <- numeric(T_full + 1)
+    
+    for(t in 1:T_full) {
+      curr_idx <- idx_mat[t, j]
+      
+      if (t < b_yr) {
+        eta_oracle_full[curr_idx] <- NA
+        next
+      }
+      
+      if (t == b_yr) {
+        w[1] <- 1.0 # state 0 with probability 1
+        lp <- beta_0 + beta_gdp * log_gdp[curr_idx] + beta_democ * democ[curr_idx] +
+              beta_eth * eth + beta_pop * log_pop[curr_idx] + beta_ref * log_ref[curr_idx] +
+              beta_v * 0
+        p_val <- pmin(pmax(lp, 0), 1)
+        eta_oracle_full[curr_idx] <- p_val
+        
+        # Prior state for next period
+        next_w <- numeric(T_full + 1)
+        next_w[1] <- p_val
+        next_w[2] <- 1 - p_val
+        w <- next_w
+        next
+      }
+      
+      p_t_vec <- numeric(T_full + 1)
+      for (s in 0:(t - b_yr)) {
+        lp <- beta_0 + beta_gdp * log_gdp[curr_idx] + beta_democ * democ[curr_idx] +
+              beta_eth * eth + beta_pop * log_pop[curr_idx] + beta_ref * log_ref[curr_idx] +
+              beta_v * s
+        p_t_vec[s + 1] <- pmin(pmax(lp, 0), 1)
+      }
+      
+      eta_val <- sum(w * p_t_vec)
+      eta_oracle_full[curr_idx] <- eta_val
+      
+      Y_t <- onset[curr_idx]
+      
+      if (t >= o_start) {
+        if (Y_t == 1) {
+          w_post <- numeric(T_full + 1)
+          w_post[1] <- 1.0
+        } else {
+          w_post <- w * (1 - p_t_vec)
+          sum_w_post <- sum(w_post)
+          w_post <- if (sum_w_post > 0) w_post / sum_w_post else {
+            rep_val <- numeric(T_full + 1); rep_val[1] <- 1.0; rep_val
+          }
+        }
+      } else {
+        w_post <- w
+      }
+      
+      next_w <- numeric(T_full + 1)
+      next_w[1] <- sum(w_post * p_t_vec)
+      for (s in 0:(t - b_yr)) {
+        next_w[s + 2] <- w_post[s + 1] * (1 - p_t_vec[s + 1])
+      }
+      w <- next_w
+    }
+  }
+
   full_data <- data.frame(
     country = ids,
     year = years,
@@ -101,7 +173,8 @@ gen_pop <- function(
     democ = democ,
     log_pop = log_pop,
     log_ref = log_ref,
-    true_duration = true_duration
+    true_duration = true_duration,
+    eta_oracle = eta_oracle_full
   ) %>%
     left_join(country_meta, by = "country")
 
@@ -118,7 +191,7 @@ gen_pop <- function(
     ) %>%
     ungroup() %>%
     select(country, year, onset, log_gdp, democ, eth_het, log_pop, log_ref,
-           v0, v1, true_duration, birth_year, obs_start_year)
+           v0, v1, true_duration, birth_year, obs_start_year, eta_oracle)
 
   true_params <- c(
     "(Intercept)" = beta_0,
@@ -133,19 +206,20 @@ gen_pop <- function(
   return(list(data = obs_data, true_params = true_params, meta = country_meta))
 }
 
-gen_pop_simple <- function(
-  n = 1000,
-) {
-  gamma = c(1, -1, 1)
+gen_pop_simple <- function(n = 1000) {
+  gamma <- c(1, -1, 1)
   v <- runif(n, -2, 3)
   v0 <- floor(v)
   v1 <- v0 + 1
   x <- runif(n, 0, 5)
   eps <- rnorm(n, 0, 1)
   y <- gamma[1] + gamma[2]*x + v*gamma[3] + eps
+  
+  eta_oracle <- gamma[1] + gamma[2]*x + gamma[3] * (v0 + v1) / 2
 
   return(data.frame(
-          y=as.numeric(y), 
-          v, x, v0, v1
-        ))
+    y = as.numeric(y), 
+    v, x, v0, v1,
+    eta_oracle = eta_oracle
+  ))
 }
