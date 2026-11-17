@@ -12,13 +12,14 @@ dir.create(out, recursive = TRUE, showWarnings = FALSE)
 # Each country's initial age is uniform on 0:A; 20% enter with known age 0.
 # Duration is measured BEFORE drawing the current onset (including event rows).
 generate <- function(shape, assignment) {
-  A <- sample(10:30, N, replace = TRUE)
-  A[sample(N, N / 5)] <- 0
+  c_i <- runif(N, -1, 1)
+  A <- 10L + as.integer(round(20 * plogis(2.5 * c_i)))
+  A[runif(N) < plogis(-1.6 - 2 * c_i)] <- 0L
   age <- vapply(A, function(a) sample.int(a + 1, 1) - 1L, integer(1))
   lo <- integer(N); unknown <- A > 0; spell <- integer(N)
   ans <- vector("list", TT)
   for (t in 0:(TT - 1)) {
-    z <- runif(N, -1, 1)
+    z <- 0.5 * c_i + 0.5 * runif(N, -1, 1)
     exposure_age <- if (assignment == "observed") A else age
     x <- rbinom(N, 1, plogis(-1 + 3 * exposure_age / 30 + 1.2 * z))
     f <- if (shape == "linear") 0.20 - 0.003 * age else 0.06 + 0.16 * exp(-age / 8)
